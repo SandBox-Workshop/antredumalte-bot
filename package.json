@@ -1,0 +1,36 @@
+{
+  "name": "antredumalt",
+  "version": "0.1.0",
+  "description": "Bot Discord privé pour le serveur V Rising de l'Antre du Malt.",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node ./index.js",
+    "deploy": "node ./deploy-commands.js",
+    "dev": "node ./index.js",
+    "lint": "eslint .",
+    "release": "release-it",
+    "release:dry": "release-it --dry-run"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "vrising",
+    "antredumalt"
+  ],
+  "author": "creep Gaming",
+  "license": "ISC",
+  "dependencies": {
+    "@discordjs/voice": "^0.19.2",
+    "bufferutil": "^4.1.0",
+    "discord.js": "^14.26.4",
+    "gamedig": "^5.3.3",
+    "zlib-sync": "^0.1.10"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@release-it/conventional-changelog": "^11.0.1",
+    "eslint": "^10.5.0",
+    "release-it": "^20.2.0"
+  }
+}

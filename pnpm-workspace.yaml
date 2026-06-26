@@ -1,0 +1,3 @@
+allowBuilds:
+  bufferutil: true
+  zlib-sync: true

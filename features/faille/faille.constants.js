@@ -1,0 +1,3 @@
+export const DEFAULT_DURATION_MINUTES = 30;
+export const DEFAULT_INTERVAL_MINUTES = 120;
+export const FAILLE_COLOR = 0x8b0000;

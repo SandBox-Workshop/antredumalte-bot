@@ -1,0 +1,9 @@
+{
+  "token": "TON_TOKEN_DISCORD",
+  "clientId": "TON_APPLICATION_ID",
+  "guildId": "TON_GUILD_ID",
+  "vrising": {
+    "host": "IP_DU_SERVEUR",
+    "queryPort": 9877
+  }
+}
