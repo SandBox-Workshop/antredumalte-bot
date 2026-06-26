@@ -1,6 +1,6 @@
 {
   "name": "antredumalt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Bot Discord privé pour le serveur V Rising de l'Antre du Malt.",
   "main": "index.js",
   "type": "module",
