@@ -5,5 +5,10 @@
   "vrising": {
     "host": "IP_DU_SERVEUR",
     "queryPort": 9877
+  },
+  "googleSheets": {
+    "spreadsheetId": "ID_DU_GOOGLE_SHEET",
+    "credentialsPath": "./google-service-account.json",
+    "chassesRange": "Chasse!A1:F1000"
   }
 }
