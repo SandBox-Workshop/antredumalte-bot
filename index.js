@@ -1,6 +1,19 @@
-import { Client, Collection, Events, GatewayIntentBits } from "discord.js";
+import {
+  Client,
+  Collection,
+  Events,
+  GatewayIntentBits,
+  MessageFlags,
+} from "discord.js";
+
 import { readFileSync } from "node:fs";
+
 import { loadCommands } from "./utils/load-commands.js";
+
+import {
+  handleSessionButton,
+  handleSessionHostSelect,
+} from "./features/sessions/sessions.buttons.js";
 
 const config = JSON.parse(
   readFileSync(new URL("./config.json", import.meta.url), "utf8"),
@@ -25,37 +38,76 @@ client.once(Events.ClientReady, (readyClient) => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
+  try {
+    if (interaction.isButton()) {
+      const handled = await handleSessionButton(interaction);
 
-  const command = interaction.client.commands.get(interaction.commandName);
-
-  if (!command) {
-    try {
-      await interaction.reply({
-        content: "❌ Commande inconnue.",
-        flags: 64,
-      });
-    } catch (error) {
-      console.error("Impossible de répondre à une commande inconnue :", error);
+      if (handled) {
+        return;
+      }
     }
 
-    return;
-  }
+    if (interaction.isUserSelectMenu()) {
+      const handled = await handleSessionHostSelect(interaction);
 
-  try {
+      if (handled) {
+        return;
+      }
+    }
+
+    if (interaction.isAutocomplete()) {
+      const command = interaction.client.commands.get(interaction.commandName);
+
+      if (!command) {
+        await interaction.respond([]);
+        return;
+      }
+
+      if ("autocomplete" in command) {
+        await command.autocomplete(interaction);
+      } else {
+        await interaction.respond([]);
+      }
+
+      return;
+    }
+
+    if (!interaction.isChatInputCommand()) {
+      return;
+    }
+
+    const command = interaction.client.commands.get(interaction.commandName);
+
+    if (!command) {
+      await interaction.reply({
+        content: "❌ Commande inconnue.",
+        flags: MessageFlags.Ephemeral,
+      });
+
+      return;
+    }
+
     await command.execute(interaction);
   } catch (error) {
     console.error(error);
 
-    // 10062 = Unknown interaction / interaction expirée
-    // 40060 = Interaction déjà répondue
     if (error.code === 10062 || error.code === 40060) {
       return;
     }
 
+    if (interaction.isAutocomplete()) {
+      try {
+        await interaction.respond([]);
+      } catch {
+        // L'interaction a probablement expiré.
+      }
+
+      return;
+    }
+
     const payload = {
-      content: "❌ Une erreur est arrivée pendant la commande.",
-      flags: 64,
+      content: "❌ Une erreur est arrivée pendant l'interaction.",
+      flags: MessageFlags.Ephemeral,
     };
 
     try {
@@ -65,11 +117,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply(payload);
       }
     } catch (replyError) {
-      if (replyError.code === 10062 || replyError.code === 40060) {
-        return;
+      if (replyError.code !== 10062 && replyError.code !== 40060) {
+        console.error("Impossible d'envoyer le message d'erreur :", replyError);
       }
-
-      console.error("Impossible d'envoyer le message d'erreur :", replyError);
     }
   }
 });
