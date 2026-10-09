@@ -23,6 +23,9 @@ importers:
       googleapis:
         specifier: ^173.0.0
         version: 173.0.0
+      tsx:
+        specifier: ^4.23.15
+        version: 4.23.15
       zlib-sync:
         specifier: ^0.1.10
         version: 0.1.10
@@ -33,6 +36,9 @@ importers:
       '@release-it/conventional-changelog':
         specifier: ^11.0.1
         version: 11.0.1(conventional-commits-filter@5.0.0)(conventional-commits-parser@6.4.0)(release-it@20.2.0(@types/node@26.6.4))
+      '@types/gamedig':
+        specifier: ^5.0.3
+        version: 5.0.3
       '@types/node':
         specifier: ^26.6.4
         version: 26.6.4
@@ -45,9 +51,6 @@ importers:
       release-it:
         specifier: ^20.2.0
         version: 20.2.0(@types/node@26.6.4)
-      tsx:
-        specifier: ^4.23.15
-        version: 4.23.15
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -673,6 +676,9 @@ packages:
 
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
+
+  '@types/gamedig@5.0.3':
+    resolution: {integrity: sha512-VLrOVRf72wVE6P0DhFtRVodiONwL51uojn6dNpP/Ks/Vdm3CDH6dZTAw74WmCDLuyvpytNy8auKzlTKfBlO8jg==}
 
   '@types/http-cache-semantics@4.2.0':
     resolution: {integrity: sha512-L3LgimLHXtGkWikKnsPg0/VFx9OGZaC+eN1u4r+OB1XRqH3meBIAVC2zr1WdMH+RHmnRkqliQAOHNJ/E0j/e0Q==}
@@ -2651,6 +2657,8 @@ snapshots:
   '@types/esrecurse@4.3.1': {}
 
   '@types/estree@1.0.9': {}
+
+  '@types/gamedig@5.0.3': {}
 
   '@types/http-cache-semantics@4.2.0': {}
 

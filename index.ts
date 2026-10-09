@@ -1,17 +1,15 @@
 import { Client, Collection, GatewayIntentBits } from "discord.js";
 
-import { readFileSync } from "node:fs";
-
+import { loadAppConfig } from "./config/app-config.js";
+import type { BotClient } from "./types/client.js";
 import { loadCommands } from "./utils/load-commands.js";
-import { loadEvents } from "./utils/load-events.ts";
+import { loadEvents } from "./utils/load-events.js";
 
-const config = JSON.parse(
-  readFileSync(new URL("./config.json", import.meta.url), "utf8"),
-);
+const config = loadAppConfig();
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
-});
+}) as BotClient;
 
 client.commands = new Collection();
 
@@ -37,10 +35,18 @@ for (const event of events) {
 
 console.log(`✅ ${events.length} event(s) chargé(s).`);
 
+/**
+ * Capture les promesses rejetées qui n'ont pas été gérées
+ * explicitement par le code applicatif.
+ */
 process.on("unhandledRejection", (error) => {
   console.error("Promesse rejetée non gérée :", error);
 });
 
+/**
+ * Capture les erreurs synchrones qui atteignent le niveau
+ * global du processus.
+ */
 process.on("uncaughtException", (error) => {
   console.error("Erreur non capturée :", error);
 });
