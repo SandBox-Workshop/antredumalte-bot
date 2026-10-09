@@ -1,5 +1,5 @@
 node_modules
-config.json
+config/config.json
 data
 .env
 google-service-account.json
