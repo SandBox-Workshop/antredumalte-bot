@@ -18,7 +18,7 @@ import {
   leaveSession,
   maybeSession,
   transferSessionHost,
-} from "./sessions.state.js";
+} from "../../services/session.service.js";
 
 export function buildSessionButtons() {
   return new ActionRowBuilder().addComponents(
@@ -70,14 +70,14 @@ export async function handleSessionButton(interaction) {
   }
 
   const messageId = interaction.message.id;
+
   const userId = interaction.user.id;
 
   const currentSession = getSession(messageId);
 
   if (!currentSession) {
     await interaction.reply({
-      content:
-        "❌ Cette session n'est plus disponible. Le bot a peut-être redémarré.",
+      content: "❌ Cette session n'existe plus ou n'a pas été enregistrée.",
       flags: MessageFlags.Ephemeral,
     });
 
@@ -87,12 +87,12 @@ export async function handleSessionButton(interaction) {
   const action = interaction.customId.split(":")[1];
 
   if (
-    userId === currentSession.creatorId &&
+    userId === currentSession.hostId &&
     (action === "leave" || action === "maybe")
   ) {
     await interaction.reply({
       content:
-        "👑 Tu es l'hôte de cette session. Transfère d'abord l'hôte à quelqu'un d'autre ou annule la session.",
+        "👑 Tu es l'hôte de cette session. Transfère d'abord l'hôte ou annule la session.",
       flags: MessageFlags.Ephemeral,
     });
 
@@ -140,7 +140,7 @@ export async function handleSessionButton(interaction) {
     }
 
     case "transfer": {
-      if (userId !== currentSession.creatorId) {
+      if (userId !== currentSession.hostId) {
         await interaction.reply({
           content: "❌ Seul l'hôte peut transférer la session.",
           flags: MessageFlags.Ephemeral,
@@ -160,8 +160,7 @@ export async function handleSessionButton(interaction) {
       }
 
       await interaction.reply({
-        content:
-          "👑 Choisis le participant qui deviendra le nouvel hôte de la session :",
+        content: "👑 Choisis le participant qui deviendra le nouvel hôte :",
         components: [buildHostSelect(messageId)],
         flags: MessageFlags.Ephemeral,
       });
@@ -170,7 +169,7 @@ export async function handleSessionButton(interaction) {
     }
 
     case "cancel": {
-      if (userId !== currentSession.creatorId) {
+      if (userId !== currentSession.hostId) {
         await interaction.reply({
           content: "❌ Seul l'hôte peut annuler cette session.",
           flags: MessageFlags.Ephemeral,
@@ -202,6 +201,7 @@ export async function handleSessionHostSelect(interaction) {
   }
 
   const messageId = interaction.customId.split(":")[2];
+
   const currentSession = getSession(messageId);
 
   if (!currentSession) {
@@ -213,7 +213,7 @@ export async function handleSessionHostSelect(interaction) {
     return true;
   }
 
-  if (interaction.user.id !== currentSession.creatorId) {
+  if (interaction.user.id !== currentSession.hostId) {
     await interaction.update({
       content: "❌ Tu n'es plus l'hôte de cette session.",
       components: [],
@@ -224,7 +224,7 @@ export async function handleSessionHostSelect(interaction) {
 
   const newHostId = interaction.values[0];
 
-  if (newHostId === currentSession.creatorId) {
+  if (newHostId === currentSession.hostId) {
     await interaction.update({
       content: "❌ Tu es déjà l'hôte de cette session.",
       components: [],
@@ -235,8 +235,7 @@ export async function handleSessionHostSelect(interaction) {
 
   if (!currentSession.participants.has(newHostId)) {
     await interaction.update({
-      content:
-        "❌ Le nouvel hôte doit d'abord avoir rejoint la session avec le bouton **Rejoindre**.",
+      content: "❌ Le nouvel hôte doit d'abord rejoindre la session.",
       components: [],
     });
 

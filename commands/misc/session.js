@@ -1,21 +1,31 @@
-import { SlashCommandBuilder } from "discord.js";
+import { MessageFlags, SlashCommandBuilder } from "discord.js";
 
 import {
   getGameById,
   searchEnabledGames,
 } from "../../services/game.service.js";
 
-import { buildSessionEmbed } from "../../features/sessions/sessions.embed.js";
+import {
+  createSession,
+  getSessionHistory,
+} from "../../services/session.service.js";
+
+import {
+  buildSessionEmbed,
+  buildSessionHistoryEmbed,
+} from "../../features/sessions/sessions.embed.js";
+
 import { buildSessionButtons } from "../../features/sessions/sessions.buttons.js";
-import { createSession } from "../../features/sessions/sessions.state.js";
 
 export const data = new SlashCommandBuilder()
   .setName("session")
-  .setDescription("Organise une session de jeu")
+  .setDescription("Gestion des sessions de jeu")
+
   .addSubcommand((subcommand) =>
     subcommand
       .setName("create")
       .setDescription("Crée une nouvelle session")
+
       .addStringOption((option) =>
         option
           .setName("jeu")
@@ -23,6 +33,7 @@ export const data = new SlashCommandBuilder()
           .setRequired(true)
           .setAutocomplete(true),
       )
+
       .addStringOption((option) =>
         option
           .setName("quand")
@@ -30,12 +41,28 @@ export const data = new SlashCommandBuilder()
           .setRequired(true)
           .setMaxLength(100),
       )
+
       .addStringOption((option) =>
         option
           .setName("description")
           .setDescription("Petit message pour la session")
           .setRequired(false)
           .setMaxLength(500),
+      ),
+  )
+
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName("history")
+      .setDescription("Affiche l'historique des sessions")
+
+      .addIntegerOption((option) =>
+        option
+          .setName("limite")
+          .setDescription("Nombre de sessions à afficher")
+          .setRequired(false)
+          .setMinValue(1)
+          .setMaxValue(20),
       ),
   );
 
@@ -57,20 +84,20 @@ export async function autocomplete(interaction) {
   );
 }
 
-export async function execute(interaction) {
-  const subcommand = interaction.options.getSubcommand();
-
-  if (subcommand !== "create") {
+async function createGameSession(interaction) {
+  if (!interaction.guildId || !interaction.channelId) {
     await interaction.reply({
-      content: "❌ Sous-commande inconnue.",
-      flags: 64,
+      content: "❌ Les sessions doivent être créées dans un serveur Discord.",
+      flags: MessageFlags.Ephemeral,
     });
 
     return;
   }
 
   const gameId = interaction.options.getString("jeu", true);
+
   const when = interaction.options.getString("quand", true);
+
   const description = interaction.options.getString("description");
 
   const game = getGameById(gameId);
@@ -78,20 +105,23 @@ export async function execute(interaction) {
   if (!game || !game.enabled) {
     await interaction.reply({
       content: "❌ Ce jeu n'est pas disponible pour créer une session.",
-      flags: 64,
+      flags: MessageFlags.Ephemeral,
     });
 
     return;
   }
 
   const participants = new Set([interaction.user.id]);
+
   const maybes = new Set();
 
   const embed = buildSessionEmbed({
     game,
     when,
     description,
-    creatorId: interaction.user.id,
+
+    hostId: interaction.user.id,
+
     participants,
     maybes,
   });
@@ -104,9 +134,56 @@ export async function execute(interaction) {
   const message = await interaction.fetchReply();
 
   createSession(message.id, {
+    guildId: interaction.guildId,
+
+    channelId: interaction.channelId,
+
     game,
     when,
     description,
+
     creatorId: interaction.user.id,
   });
+}
+
+async function showSessionHistory(interaction) {
+  if (!interaction.guildId) {
+    await interaction.reply({
+      content:
+        "❌ L'historique est uniquement disponible dans un serveur Discord.",
+      flags: MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  const limit = interaction.options.getInteger("limite") ?? 10;
+
+  const sessions = getSessionHistory(interaction.guildId, limit);
+
+  const embed = buildSessionHistoryEmbed(sessions);
+
+  await interaction.reply({
+    embeds: [embed],
+  });
+}
+
+export async function execute(interaction) {
+  const subcommand = interaction.options.getSubcommand();
+
+  switch (subcommand) {
+    case "create":
+      await createGameSession(interaction);
+      return;
+
+    case "history":
+      await showSessionHistory(interaction);
+      return;
+
+    default:
+      await interaction.reply({
+        content: "❌ Sous-commande inconnue.",
+        flags: MessageFlags.Ephemeral,
+      });
+  }
 }
