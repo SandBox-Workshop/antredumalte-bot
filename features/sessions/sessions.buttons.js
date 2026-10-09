@@ -8,11 +8,13 @@ import {
 
 import {
   buildCancelledSessionEmbed,
+  buildCompletedSessionEmbed,
   buildSessionEmbed,
 } from "./sessions.embed.js";
 
 import {
   cancelSession,
+  completeSession,
   getSession,
   joinSession,
   leaveSession,
@@ -21,7 +23,7 @@ import {
 } from "../../services/session.service.js";
 
 export function buildSessionButtons() {
-  return new ActionRowBuilder().addComponents(
+  const participationRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("session:join")
       .setLabel("Rejoindre")
@@ -39,7 +41,9 @@ export function buildSessionButtons() {
       .setLabel("Quitter")
       .setEmoji("❌")
       .setStyle(ButtonStyle.Secondary),
+  );
 
+  const managementRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("session:transfer")
       .setLabel("Changer d'hôte")
@@ -47,11 +51,19 @@ export function buildSessionButtons() {
       .setStyle(ButtonStyle.Primary),
 
     new ButtonBuilder()
+      .setCustomId("session:complete")
+      .setLabel("Terminer")
+      .setEmoji("✅")
+      .setStyle(ButtonStyle.Success),
+
+    new ButtonBuilder()
       .setCustomId("session:cancel")
       .setLabel("Annuler")
       .setEmoji("🗑️")
       .setStyle(ButtonStyle.Danger),
   );
+
+  return [participationRow, managementRow];
 }
 
 function buildHostSelect(messageId) {
@@ -77,7 +89,7 @@ export async function handleSessionButton(interaction) {
 
   if (!currentSession) {
     await interaction.reply({
-      content: "❌ Cette session n'existe plus ou n'a pas été enregistrée.",
+      content: "❌ Cette session n'existe plus ou n'est plus active.",
       flags: MessageFlags.Ephemeral,
     });
 
@@ -107,7 +119,7 @@ export async function handleSessionButton(interaction) {
 
       await interaction.update({
         embeds: [embed],
-        components: [buildSessionButtons()],
+        components: buildSessionButtons(),
       });
 
       return true;
@@ -120,7 +132,7 @@ export async function handleSessionButton(interaction) {
 
       await interaction.update({
         embeds: [embed],
-        components: [buildSessionButtons()],
+        components: buildSessionButtons(),
       });
 
       return true;
@@ -133,7 +145,7 @@ export async function handleSessionButton(interaction) {
 
       await interaction.update({
         embeds: [embed],
-        components: [buildSessionButtons()],
+        components: buildSessionButtons(),
       });
 
       return true;
@@ -163,6 +175,28 @@ export async function handleSessionButton(interaction) {
         content: "👑 Choisis le participant qui deviendra le nouvel hôte :",
         components: [buildHostSelect(messageId)],
         flags: MessageFlags.Ephemeral,
+      });
+
+      return true;
+    }
+
+    case "complete": {
+      if (userId !== currentSession.hostId) {
+        await interaction.reply({
+          content: "❌ Seul l'hôte peut terminer cette session.",
+          flags: MessageFlags.Ephemeral,
+        });
+
+        return true;
+      }
+
+      const completedSession = completeSession(messageId);
+
+      const embed = buildCompletedSessionEmbed(completedSession);
+
+      await interaction.update({
+        embeds: [embed],
+        components: [],
       });
 
       return true;
@@ -259,7 +293,7 @@ export async function handleSessionHostSelect(interaction) {
 
   await sessionMessage.edit({
     embeds: [embed],
-    components: [buildSessionButtons()],
+    components: buildSessionButtons(),
   });
 
   await interaction.update({

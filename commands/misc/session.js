@@ -128,7 +128,7 @@ async function createGameSession(interaction) {
 
   await interaction.reply({
     embeds: [embed],
-    components: [buildSessionButtons()],
+    components: buildSessionButtons(),
   });
 
   const message = await interaction.fetchReply();

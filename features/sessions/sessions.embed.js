@@ -138,6 +138,49 @@ export function buildCancelledSessionEmbed({
   return embed;
 }
 
+export function buildCompletedSessionEmbed({
+  game,
+  when,
+  description,
+  hostId,
+  participants,
+}) {
+  const embed = new EmbedBuilder()
+    .setColor(0x57f287)
+    .setTitle(`${game.emoji ?? "🎮"} Session terminée • ${game.name}`)
+    .addFields(
+      {
+        name: "🕒 Prévue",
+        value: when,
+        inline: true,
+      },
+      {
+        name: "👑 Hôte",
+        value: `<@${hostId}>`,
+        inline: true,
+      },
+      {
+        name: `✅ Participants (${participants?.size ?? 0})`,
+        value: formatUsers(participants),
+        inline: false,
+      },
+    )
+    .setFooter({
+      text: "YOLO • Session terminée",
+    })
+    .setTimestamp();
+
+  if (description) {
+    embed.setDescription(
+      `${description}\n\n✅ **Cette session est terminée.**`,
+    );
+  } else {
+    embed.setDescription("✅ **Cette session est terminée.**");
+  }
+
+  return embed;
+}
+
 export function buildSessionHistoryEmbed(sessions) {
   const embed = new EmbedBuilder()
     .setColor(0x5865f2)

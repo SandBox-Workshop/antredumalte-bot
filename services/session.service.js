@@ -265,6 +265,30 @@ export function cancelSession(messageId) {
   };
 }
 
+export function completeSession(messageId) {
+  const session = getSession(messageId);
+
+  if (!session) {
+    return null;
+  }
+
+  const statement = db.prepare(`
+    UPDATE sessions
+    SET
+      status = 'completed',
+      completed_at = CURRENT_TIMESTAMP,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `);
+
+  statement.run(session.id);
+
+  return {
+    ...session,
+    status: "completed",
+  };
+}
+
 export function getSessionHistory(guildId, limit = 10) {
   const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 20));
 
