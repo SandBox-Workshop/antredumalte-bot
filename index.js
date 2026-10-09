@@ -12,6 +12,7 @@ import { loadCommands } from "./utils/load-commands.js";
 
 import {
   handleSessionButton,
+  handleSessionEditModal,
   handleSessionHostSelect,
 } from "./features/sessions/sessions.buttons.js";
 
@@ -55,11 +56,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
     }
 
+    if (interaction.isModalSubmit()) {
+      const handled = await handleSessionEditModal(interaction);
+
+      if (handled) {
+        return;
+      }
+    }
+
     if (interaction.isAutocomplete()) {
       const command = interaction.client.commands.get(interaction.commandName);
 
       if (!command) {
         await interaction.respond([]);
+
         return;
       }
 
@@ -99,7 +109,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       try {
         await interaction.respond([]);
       } catch {
-        // L'interaction a probablement expiré.
+        // Interaction expirée.
       }
 
       return;

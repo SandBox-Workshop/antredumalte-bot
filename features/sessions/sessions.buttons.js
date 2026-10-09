@@ -3,6 +3,9 @@ import {
   ButtonBuilder,
   ButtonStyle,
   MessageFlags,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   UserSelectMenuBuilder,
 } from "discord.js";
 
@@ -20,6 +23,7 @@ import {
   leaveSession,
   maybeSession,
   transferSessionHost,
+  updateSessionDetails,
 } from "../../services/session.service.js";
 
 export function buildSessionButtons() {
@@ -44,6 +48,12 @@ export function buildSessionButtons() {
   );
 
   const managementRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("session:edit")
+      .setLabel("Modifier")
+      .setEmoji("✏️")
+      .setStyle(ButtonStyle.Secondary),
+
     new ButtonBuilder()
       .setCustomId("session:transfer")
       .setLabel("Changer d'hôte")
@@ -74,6 +84,39 @@ function buildHostSelect(messageId) {
       .setMinValues(1)
       .setMaxValues(1),
   );
+}
+
+function buildEditModal(session) {
+  const modal = new ModalBuilder()
+    .setCustomId(`session:edit:${session.messageId}`)
+    .setTitle("Modifier la session");
+
+  const whenInput = new TextInputBuilder()
+    .setCustomId("when")
+    .setLabel("Quand ?")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(100)
+    .setValue(session.when);
+
+  const descriptionInput = new TextInputBuilder()
+    .setCustomId("description")
+    .setLabel("Description")
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(false)
+    .setMaxLength(500);
+
+  if (session.description) {
+    descriptionInput.setValue(session.description);
+  }
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(whenInput),
+
+    new ActionRowBuilder().addComponents(descriptionInput),
+  );
+
+  return modal;
 }
 
 export async function handleSessionButton(interaction) {
@@ -147,6 +190,21 @@ export async function handleSessionButton(interaction) {
         embeds: [embed],
         components: buildSessionButtons(),
       });
+
+      return true;
+    }
+
+    case "edit": {
+      if (userId !== currentSession.hostId) {
+        await interaction.reply({
+          content: "❌ Seul l'hôte peut modifier cette session.",
+          flags: MessageFlags.Ephemeral,
+        });
+
+        return true;
+      }
+
+      await interaction.showModal(buildEditModal(currentSession));
 
       return true;
     }
@@ -299,6 +357,79 @@ export async function handleSessionHostSelect(interaction) {
   await interaction.update({
     content: `👑 <@${newHostId}> est maintenant l'hôte de la session.`,
     components: [],
+  });
+
+  return true;
+}
+
+export async function handleSessionEditModal(interaction) {
+  if (!interaction.customId.startsWith("session:edit:")) {
+    return false;
+  }
+
+  const messageId = interaction.customId.split(":")[2];
+
+  const currentSession = getSession(messageId);
+
+  if (!currentSession) {
+    await interaction.reply({
+      content: "❌ Cette session n'existe plus ou n'est plus active.",
+      flags: MessageFlags.Ephemeral,
+    });
+
+    return true;
+  }
+
+  if (interaction.user.id !== currentSession.hostId) {
+    await interaction.reply({
+      content: "❌ Tu n'es plus l'hôte de cette session.",
+      flags: MessageFlags.Ephemeral,
+    });
+
+    return true;
+  }
+
+  const when = interaction.fields.getTextInputValue("when").trim();
+
+  const description = interaction.fields
+    .getTextInputValue("description")
+    .trim();
+
+  if (!when) {
+    await interaction.reply({
+      content: "❌ Le moment de la session ne peut pas être vide.",
+      flags: MessageFlags.Ephemeral,
+    });
+
+    return true;
+  }
+
+  const session = updateSessionDetails(messageId, {
+    when,
+    description,
+  });
+
+  if (!interaction.channel) {
+    await interaction.reply({
+      content: "❌ Impossible de retrouver le salon de la session.",
+      flags: MessageFlags.Ephemeral,
+    });
+
+    return true;
+  }
+
+  const sessionMessage = await interaction.channel.messages.fetch(messageId);
+
+  const embed = buildSessionEmbed(session);
+
+  await sessionMessage.edit({
+    embeds: [embed],
+    components: buildSessionButtons(),
+  });
+
+  await interaction.reply({
+    content: "✅ Session modifiée.",
+    flags: MessageFlags.Ephemeral,
   });
 
   return true;

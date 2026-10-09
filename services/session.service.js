@@ -172,9 +172,7 @@ export function createSession(messageId, session) {
 }
 
 export function getSession(messageId) {
-  const row = getSessionRow(messageId);
-
-  return hydrateSession(row);
+  return hydrateSession(getSessionRow(messageId));
 }
 
 export function joinSession(messageId, userId) {
@@ -237,6 +235,27 @@ export function transferSessionHost(messageId, newHostId) {
   `);
 
   statement.run(newHostId, session.id);
+
+  return getSession(messageId);
+}
+
+export function updateSessionDetails(messageId, { when, description }) {
+  const session = getSession(messageId);
+
+  if (!session) {
+    return null;
+  }
+
+  const statement = db.prepare(`
+    UPDATE sessions
+    SET
+      when_text = ?,
+      description = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `);
+
+  statement.run(when, description || null, session.id);
 
   return getSession(messageId);
 }
