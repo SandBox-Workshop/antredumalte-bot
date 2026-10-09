@@ -13,6 +13,7 @@ import { loadCommands } from "./utils/load-commands.js";
 import {
   handleSessionButton,
   handleSessionEditModal,
+  handleSessionGameSelect,
   handleSessionHostSelect,
 } from "./features/sessions/sessions.buttons.js";
 
@@ -50,6 +51,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isUserSelectMenu()) {
       const handled = await handleSessionHostSelect(interaction);
+
+      if (handled) {
+        return;
+      }
+    }
+
+    if (interaction.isStringSelectMenu()) {
+      const handled = await handleSessionGameSelect(interaction);
 
       if (handled) {
         return;

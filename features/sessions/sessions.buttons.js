@@ -4,10 +4,13 @@ import {
   ButtonStyle,
   MessageFlags,
   ModalBuilder,
+  StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
   UserSelectMenuBuilder,
 } from "discord.js";
+
+import { getEnabledGames, getGameById } from "../../services/game.service.js";
 
 import {
   buildCancelledSessionEmbed,
@@ -24,6 +27,7 @@ import {
   maybeSession,
   transferSessionHost,
   updateSessionDetails,
+  updateSessionGame,
 } from "../../services/session.service.js";
 
 export function buildSessionButtons() {
@@ -55,6 +59,12 @@ export function buildSessionButtons() {
       .setStyle(ButtonStyle.Secondary),
 
     new ButtonBuilder()
+      .setCustomId("session:game")
+      .setLabel("Changer le jeu")
+      .setEmoji("🎮")
+      .setStyle(ButtonStyle.Secondary),
+
+    new ButtonBuilder()
       .setCustomId("session:transfer")
       .setLabel("Changer d'hôte")
       .setEmoji("👑")
@@ -83,6 +93,33 @@ function buildHostSelect(messageId) {
       .setPlaceholder("Choisir le nouvel hôte")
       .setMinValues(1)
       .setMaxValues(1),
+  );
+}
+
+function buildGameSelect(messageId, currentGameId) {
+  const games = getEnabledGames();
+
+  const options = games.slice(0, 25).map((game) => {
+    const option = {
+      label: game.name,
+      value: game.id,
+      default: game.id === currentGameId,
+    };
+
+    if (game.emoji) {
+      option.emoji = game.emoji;
+    }
+
+    return option;
+  });
+
+  return new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`session:game:${messageId}`)
+      .setPlaceholder("Choisir un jeu")
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(options),
   );
 }
 
@@ -158,10 +195,8 @@ export async function handleSessionButton(interaction) {
     case "join": {
       const session = joinSession(messageId, userId);
 
-      const embed = buildSessionEmbed(session);
-
       await interaction.update({
-        embeds: [embed],
+        embeds: [buildSessionEmbed(session)],
         components: buildSessionButtons(),
       });
 
@@ -171,10 +206,8 @@ export async function handleSessionButton(interaction) {
     case "maybe": {
       const session = maybeSession(messageId, userId);
 
-      const embed = buildSessionEmbed(session);
-
       await interaction.update({
-        embeds: [embed],
+        embeds: [buildSessionEmbed(session)],
         components: buildSessionButtons(),
       });
 
@@ -184,10 +217,8 @@ export async function handleSessionButton(interaction) {
     case "leave": {
       const session = leaveSession(messageId, userId);
 
-      const embed = buildSessionEmbed(session);
-
       await interaction.update({
-        embeds: [embed],
+        embeds: [buildSessionEmbed(session)],
         components: buildSessionButtons(),
       });
 
@@ -205,6 +236,36 @@ export async function handleSessionButton(interaction) {
       }
 
       await interaction.showModal(buildEditModal(currentSession));
+
+      return true;
+    }
+
+    case "game": {
+      if (userId !== currentSession.hostId) {
+        await interaction.reply({
+          content: "❌ Seul l'hôte peut changer le jeu.",
+          flags: MessageFlags.Ephemeral,
+        });
+
+        return true;
+      }
+
+      const games = getEnabledGames();
+
+      if (games.length === 0) {
+        await interaction.reply({
+          content: "❌ Aucun jeu actif n'est disponible.",
+          flags: MessageFlags.Ephemeral,
+        });
+
+        return true;
+      }
+
+      await interaction.reply({
+        content: "🎮 Choisis le nouveau jeu de la session :",
+        components: [buildGameSelect(messageId, currentSession.game.id)],
+        flags: MessageFlags.Ephemeral,
+      });
 
       return true;
     }
@@ -250,10 +311,8 @@ export async function handleSessionButton(interaction) {
 
       const completedSession = completeSession(messageId);
 
-      const embed = buildCompletedSessionEmbed(completedSession);
-
       await interaction.update({
-        embeds: [embed],
+        embeds: [buildCompletedSessionEmbed(completedSession)],
         components: [],
       });
 
@@ -272,10 +331,8 @@ export async function handleSessionButton(interaction) {
 
       const cancelledSession = cancelSession(messageId);
 
-      const embed = buildCancelledSessionEmbed(cancelledSession);
-
       await interaction.update({
-        embeds: [embed],
+        embeds: [buildCancelledSessionEmbed(cancelledSession)],
         components: [],
       });
 
@@ -347,15 +404,88 @@ export async function handleSessionHostSelect(interaction) {
 
   const session = transferSessionHost(messageId, newHostId);
 
-  const embed = buildSessionEmbed(session);
-
   await sessionMessage.edit({
-    embeds: [embed],
+    embeds: [buildSessionEmbed(session)],
     components: buildSessionButtons(),
   });
 
   await interaction.update({
     content: `👑 <@${newHostId}> est maintenant l'hôte de la session.`,
+    components: [],
+  });
+
+  return true;
+}
+
+export async function handleSessionGameSelect(interaction) {
+  if (!interaction.customId.startsWith("session:game:")) {
+    return false;
+  }
+
+  const messageId = interaction.customId.split(":")[2];
+
+  const currentSession = getSession(messageId);
+
+  if (!currentSession) {
+    await interaction.update({
+      content: "❌ Cette session n'existe plus ou n'est plus active.",
+      components: [],
+    });
+
+    return true;
+  }
+
+  if (interaction.user.id !== currentSession.hostId) {
+    await interaction.update({
+      content: "❌ Tu n'es plus l'hôte de cette session.",
+      components: [],
+    });
+
+    return true;
+  }
+
+  const gameId = interaction.values[0];
+
+  const game = getGameById(gameId);
+
+  if (!game || !game.enabled) {
+    await interaction.update({
+      content: "❌ Ce jeu n'est plus disponible.",
+      components: [],
+    });
+
+    return true;
+  }
+
+  if (game.id === currentSession.game.id) {
+    await interaction.update({
+      content: `ℹ️ La session utilise déjà **${game.name}**.`,
+      components: [],
+    });
+
+    return true;
+  }
+
+  const session = updateSessionGame(messageId, game);
+
+  if (!interaction.channel) {
+    await interaction.update({
+      content: "❌ Impossible de retrouver le salon de la session.",
+      components: [],
+    });
+
+    return true;
+  }
+
+  const sessionMessage = await interaction.channel.messages.fetch(messageId);
+
+  await sessionMessage.edit({
+    embeds: [buildSessionEmbed(session)],
+    components: buildSessionButtons(),
+  });
+
+  await interaction.update({
+    content: `🎮 Jeu changé pour **${game.name}**.`,
     components: [],
   });
 
@@ -420,10 +550,8 @@ export async function handleSessionEditModal(interaction) {
 
   const sessionMessage = await interaction.channel.messages.fetch(messageId);
 
-  const embed = buildSessionEmbed(session);
-
   await sessionMessage.edit({
-    embeds: [embed],
+    embeds: [buildSessionEmbed(session)],
     components: buildSessionButtons(),
   });
 

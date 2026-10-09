@@ -260,6 +260,28 @@ export function updateSessionDetails(messageId, { when, description }) {
   return getSession(messageId);
 }
 
+export function updateSessionGame(messageId, game) {
+  const session = getSession(messageId);
+
+  if (!session) {
+    return null;
+  }
+
+  const statement = db.prepare(`
+    UPDATE sessions
+    SET
+      game_id = ?,
+      game_name = ?,
+      game_emoji = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `);
+
+  statement.run(game.id, game.name, game.emoji ?? null, session.id);
+
+  return getSession(messageId);
+}
+
 export function cancelSession(messageId) {
   const session = getSession(messageId);
 
