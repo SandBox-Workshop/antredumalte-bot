@@ -1,6 +1,72 @@
 import { db } from "./database.service.js";
 
-function getSessionRow(messageId) {
+import type {
+  CreateSessionInput,
+  GameSession,
+  SessionHistoryEntry,
+  SessionMemberStatus,
+  SessionStatus,
+  UpdateSessionDetailsInput,
+  UpdateSessionGameInput,
+} from "../types/session.js";
+
+/**
+ * Représentation brute d'une ligne de la table `sessions`.
+ *
+ * Les noms utilisent volontairement le snake_case du schéma SQLite.
+ * La conversion vers le modèle applicatif est effectuée dans
+ * `hydrateSession`.
+ */
+type SessionRow = {
+  id: number;
+
+  message_id: string;
+  guild_id: string;
+  channel_id: string;
+
+  game_id: string;
+  game_name: string;
+  game_emoji: string | null;
+
+  when_text: string;
+  description: string | null;
+
+  creator_id: string;
+  host_id: string;
+
+  status: SessionStatus;
+
+  created_at: string;
+  updated_at: string;
+
+  cancelled_at: string | null;
+  completed_at: string | null;
+  deleted_at: string | null;
+};
+
+/**
+ * Représentation brute d'un membre chargé depuis SQLite.
+ */
+type SessionMemberRow = {
+  user_id: string;
+  status: SessionMemberStatus;
+};
+
+/**
+ * Ligne utilisée par la requête d'historique.
+ *
+ * Les compteurs SQLite sont ajoutés à la structure standard
+ * d'une session.
+ */
+type SessionHistoryRow = SessionRow & {
+  joined_count: number | bigint;
+  maybe_count: number | bigint;
+};
+
+/**
+ * Recherche une session active à partir de son message Discord.
+ */
+function getSessionRow(messageId: string): SessionRow | null {
   const statement = db.prepare(`
     SELECT *
     FROM sessions
@@ -9,20 +75,34 @@ function getSessionRow(messageId) {
     LIMIT 1
   `);
 
-  return statement.get(messageId) ?? null;
+  const row = statement.get(messageId) as SessionRow | undefined;
+
+  return row ?? null;
 }
 
-function getSessionMembers(sessionId) {
+/**
+ * Charge les membres associés à une session.
+ */
+function getSessionMembers(sessionId: number): SessionMemberRow[] {
   const statement = db.prepare(`
     SELECT user_id, status
     FROM session_members
     WHERE session_id = ?
   `);
 
-  return statement.all(sessionId);
+  return statement.all(sessionId) as SessionMemberRow[];
 }
 
-function hydrateSession(row) {
+/**
+ * Convertit une ligne SQLite en modèle métier `GameSession`.
+ *
+ * Les membres sont répartis dans deux ensembles afin de conserver
+ * le comportement historique de la feature :
+ *
+ * - `participants` pour les membres inscrits ;
+ * - `maybes` pour les membres potentiellement disponibles.
+ */
+function hydrateSession(row: SessionRow | null): GameSession | null {
   if (!row) {
     return null;
   }
@@ -74,7 +154,14 @@ function hydrateSession(row) {
   };
 }
 
-function updateMemberStatus(sessionId, userId, status) {
+/**
+ * Insère ou met à jour le statut d'un membre dans une session.
+ */
+function updateMemberStatus(
+  sessionId: number,
+  userId: string,
+  status: SessionMemberStatus,
+): void {
   const statement = db.prepare(`
     INSERT INTO session_members (
       session_id,
@@ -92,7 +179,10 @@ function updateMemberStatus(sessionId, userId, status) {
   statement.run(sessionId, userId, status);
 }
 
-function touchSession(sessionId) {
+/**
+ * Met à jour la date de dernière modification d'une session.
+ */
+function touchSession(sessionId: number): void {
   const statement = db.prepare(`
     UPDATE sessions
     SET updated_at = CURRENT_TIMESTAMP
@@ -102,36 +192,46 @@ function touchSession(sessionId) {
   statement.run(sessionId);
 }
 
-export function createSession(messageId, session) {
+/**
+ * Crée une nouvelle session et inscrit automatiquement son créateur.
+ *
+ * L'insertion de la session et celle du membre hôte sont réalisées
+ * dans une même transaction afin d'éviter toute session partiellement
+ * créée.
+ */
+export function createSession(
+  messageId: string,
+  session: CreateSessionInput,
+): GameSession | null {
   db.exec("BEGIN IMMEDIATE");
 
   try {
     const insertSession = db.prepare(`
-      INSERT INTO sessions (
-        message_id,
-        guild_id,
-        channel_id,
+        INSERT INTO sessions (
+          message_id,
+          guild_id,
+          channel_id,
 
-        game_id,
-        game_name,
-        game_emoji,
+          game_id,
+          game_name,
+          game_emoji,
 
-        when_text,
-        description,
+          when_text,
+          description,
 
-        creator_id,
-        host_id,
+          creator_id,
+          host_id,
 
-        status
-      )
-      VALUES (
-        ?, ?, ?,
-        ?, ?, ?,
-        ?, ?,
-        ?, ?,
-        'active'
-      )
-    `);
+          status
+        )
+        VALUES (
+          ?, ?, ?,
+          ?, ?, ?,
+          ?, ?,
+          ?, ?,
+          'active'
+        )
+      `);
 
     const result = insertSession.run(
       messageId,
@@ -152,30 +252,40 @@ export function createSession(messageId, session) {
     const sessionId = Number(result.lastInsertRowid);
 
     const insertHost = db.prepare(`
-      INSERT INTO session_members (
-        session_id,
-        user_id,
-        status
-      )
-      VALUES (?, ?, 'joined')
-    `);
+        INSERT INTO session_members (
+          session_id,
+          user_id,
+          status
+        )
+        VALUES (?, ?, 'joined')
+      `);
 
     insertHost.run(sessionId, session.creatorId);
 
     db.exec("COMMIT");
-  } catch (error) {
+  } catch (error: unknown) {
     db.exec("ROLLBACK");
+
     throw error;
   }
 
   return getSession(messageId);
 }
 
-export function getSession(messageId) {
+/**
+ * Retourne une session active à partir de son message Discord.
+ */
+export function getSession(messageId: string): GameSession | null {
   return hydrateSession(getSessionRow(messageId));
 }
 
-export function joinSession(messageId, userId) {
+/**
+ * Inscrit un utilisateur à une session.
+ */
+export function joinSession(
+  messageId: string,
+  userId: string,
+): GameSession | null {
   const session = getSession(messageId);
 
   if (!session) {
@@ -189,7 +299,13 @@ export function joinSession(messageId, userId) {
   return getSession(messageId);
 }
 
-export function maybeSession(messageId, userId) {
+/**
+ * Place un utilisateur dans la catégorie « peut-être ».
+ */
+export function maybeSession(
+  messageId: string,
+  userId: string,
+): GameSession | null {
   const session = getSession(messageId);
 
   if (!session) {
@@ -203,7 +319,16 @@ export function maybeSession(messageId, userId) {
   return getSession(messageId);
 }
 
-export function leaveSession(messageId, userId) {
+/**
+ * Retire un utilisateur des participants actifs d'une session.
+ *
+ * L'entrée est conservée en base avec le statut `left` afin de
+ * préserver l'historique de participation.
+ */
+export function leaveSession(
+  messageId: string,
+  userId: string,
+): GameSession | null {
   const session = getSession(messageId);
 
   if (!session) {
@@ -217,7 +342,15 @@ export function leaveSession(messageId, userId) {
   return getSession(messageId);
 }
 
-export function transferSessionHost(messageId, newHostId) {
+/**
+ * Transfère le rôle d'hôte à un autre utilisateur.
+ *
+ * Le nouvel hôte est automatiquement marqué comme participant.
+ */
+export function transferSessionHost(
+  messageId: string,
+  newHostId: string,
+): GameSession | null {
   const session = getSession(messageId);
 
   if (!session) {
@@ -239,7 +372,13 @@ export function transferSessionHost(messageId, newHostId) {
   return getSession(messageId);
 }
 
-export function updateSessionDetails(messageId, { when, description }) {
+/**
+ * Met à jour la date/description textuelle d'une session.
+ */
+export function updateSessionDetails(
+  messageId: string,
+  { when, description }: UpdateSessionDetailsInput,
+): GameSession | null {
   const session = getSession(messageId);
 
   if (!session) {
@@ -260,7 +399,13 @@ export function updateSessionDetails(messageId, { when, description }) {
   return getSession(messageId);
 }
 
-export function updateSessionGame(messageId, game) {
+/**
+ * Remplace le jeu associé à une session.
+ */
+export function updateSessionGame(
+  messageId: string,
+  game: UpdateSessionGameInput,
+): GameSession | null {
   const session = getSession(messageId);
 
   if (!session) {
@@ -282,7 +427,14 @@ export function updateSessionGame(messageId, game) {
   return getSession(messageId);
 }
 
-export function cancelSession(messageId) {
+/**
+ * Annule une session active.
+ *
+ * Le comportement historique est conservé : l'objet retourné reçoit
+ * immédiatement le nouveau statut, tandis que les autres timestamps
+ * proviennent de l'objet chargé avant l'UPDATE.
+ */
+export function cancelSession(messageId: string): GameSession | null {
   const session = getSession(messageId);
 
   if (!session) {
@@ -306,7 +458,13 @@ export function cancelSession(messageId) {
   };
 }
 
-export function completeSession(messageId) {
+/**
+ * Marque une session active comme terminée.
+ *
+ * Comme pour l'annulation, le comportement historique du service
+ * est volontairement conservé pendant la migration TypeScript.
+ */
+export function completeSession(messageId: string): GameSession | null {
   const session = getSession(messageId);
 
   if (!session) {
@@ -330,7 +488,16 @@ export function completeSession(messageId) {
   };
 }
 
-export function getSessionHistory(guildId, limit = 10) {
+/**
+ * Retourne les dernières sessions connues d'un serveur Discord.
+ *
+ * La limite est bornée entre 1 et 20 afin d'éviter qu'une commande
+ * puisse déclencher une lecture d'historique disproportionnée.
+ */
+export function getSessionHistory(
+  guildId: string,
+  limit = 10,
+): SessionHistoryEntry[] {
   const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 20));
 
   const statement = db.prepare(`
@@ -360,7 +527,7 @@ export function getSessionHistory(guildId, limit = 10) {
     LIMIT ?
   `);
 
-  const rows = statement.all(guildId, safeLimit);
+  const rows = statement.all(guildId, safeLimit) as SessionHistoryRow[];
 
   return rows.map((row) => ({
     id: row.id,

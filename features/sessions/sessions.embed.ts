@@ -1,48 +1,106 @@
 import { EmbedBuilder } from "discord.js";
 
-function formatUsers(userIds) {
-  if (!userIds || userIds.size === 0) {
+import type {
+  GameSession,
+  SessionHistoryEntry,
+  SessionStatus,
+} from "../../types/session.js";
+
+/**
+ * Données nécessaires à l'affichage d'une session active.
+ *
+ * Le type utilise uniquement les propriétés réellement consommées
+ * par l'embed afin de pouvoir construire celui-ci aussi bien depuis
+ * une session persistée que depuis une structure compatible.
+ */
+export type SessionEmbedData = Pick<
+  GameSession,
+  "game" | "when" | "description" | "hostId" | "participants" | "maybes"
+>;
+
+/**
+ * Données nécessaires à l'affichage d'une session annulée.
+ */
+export type CancelledSessionEmbedData = Pick<
+  GameSession,
+  "game" | "when" | "description" | "hostId"
+>;
+
+/**
+ * Données nécessaires à l'affichage d'une session terminée.
+ */
+export type CompletedSessionEmbedData = Pick<
+  GameSession,
+  "game" | "when" | "description" | "hostId" | "participants"
+>;
+
+type StatusDisplay = {
+  emoji: string;
+  label: string;
+};
+
+/**
+ * Représentation visuelle de chaque statut de session.
+ *
+ * L'utilisation d'un `Record<SessionStatus, ...>` garantit que
+ * TypeScript signalera immédiatement l'ajout futur d'un statut
+ * qui n'aurait pas encore de représentation dans l'historique.
+ */
+const STATUS_DISPLAY: Record<SessionStatus, StatusDisplay> = {
+  active: {
+    emoji: "🟢",
+    label: "Active",
+  },
+
+  cancelled: {
+    emoji: "🚫",
+    label: "Annulée",
+  },
+
+  completed: {
+    emoji: "✅",
+    label: "Terminée",
+  },
+
+  deleted: {
+    emoji: "🗑️",
+    label: "Supprimée",
+  },
+};
+
+/**
+ * Formate un ensemble d'identifiants Discord sous forme
+ * de mentions affichables dans un embed.
+ */
+function formatUsers(userIds: ReadonlySet<string>): string {
+  if (userIds.size === 0) {
     return "Personne";
   }
 
   return [...userIds].map((userId) => `<@${userId}>`).join("\n");
 }
 
-function getStatusDisplay(status) {
-  switch (status) {
-    case "active":
-      return {
-        emoji: "🟢",
-        label: "Active",
-      };
-
-    case "cancelled":
-      return {
-        emoji: "🚫",
-        label: "Annulée",
-      };
-
-    case "completed":
-      return {
-        emoji: "✅",
-        label: "Terminée",
-      };
-
-    case "deleted":
-      return {
-        emoji: "🗑️",
-        label: "Supprimée",
-      };
-
-    default:
-      return {
-        emoji: "❓",
-        label: status,
-      };
-  }
+/**
+ * Retourne les informations d'affichage associées
+ * au statut d'une session.
+ */
+function getStatusDisplay(status: SessionStatus): StatusDisplay {
+  return STATUS_DISPLAY[status];
 }
 
-function sqliteDateToDiscordTimestamp(value) {
+/**
+ * Convertit une date SQLite UTC en timestamp Unix Discord.
+ *
+ * SQLite produit ici des dates au format :
+ *
+ * `YYYY-MM-DD HH:MM:SS`
+ *
+ * Le suffixe `Z` indique explicitement à JavaScript que la date
+ * doit être interprétée comme UTC.
+ *
+ * @returns Timestamp Unix en secondes ou `null` si la date est invalide.
+ */
+function sqliteDateToDiscordTimestamp(value: string | null): number | null {
   if (!value) {
     return null;
   }
@@ -56,6 +114,9 @@ function sqliteDateToDiscordTimestamp(value) {
   return Math.floor(date.getTime() / 1000);
 }
 
+/**
+ * Construit l'embed principal d'une session active.
+ */
 export function buildSessionEmbed({
   game,
   when,
@@ -63,7 +124,7 @@ export function buildSessionEmbed({
   hostId,
   participants,
   maybes,
-}) {
+}: SessionEmbedData): EmbedBuilder {
   const embed = new EmbedBuilder()
     .setColor(0x5865f2)
     .setTitle(`${game.emoji ?? "🎮"} Session • ${game.name}`)
@@ -79,12 +140,12 @@ export function buildSessionEmbed({
         inline: true,
       },
       {
-        name: `✅ Participants (${participants?.size ?? 0})`,
+        name: `✅ Participants (${participants.size})`,
         value: formatUsers(participants),
         inline: false,
       },
       {
-        name: `🤔 Peut-être (${maybes?.size ?? 0})`,
+        name: `🤔 Peut-être (${maybes.size})`,
         value: formatUsers(maybes),
         inline: false,
       },
@@ -101,12 +162,15 @@ export function buildSessionEmbed({
   return embed;
 }
 
+/**
+ * Construit l'embed final d'une session annulée.
+ */
 export function buildCancelledSessionEmbed({
   game,
   when,
   description,
   hostId,
-}) {
+}: CancelledSessionEmbedData): EmbedBuilder {
   const embed = new EmbedBuilder()
     .setColor(0xed4245)
     .setTitle(`${game.emoji ?? "🎮"} Session annulée • ${game.name}`)
@@ -138,13 +202,16 @@ export function buildCancelledSessionEmbed({
   return embed;
 }
 
+/**
+ * Construit l'embed final d'une session terminée.
+ */
 export function buildCompletedSessionEmbed({
   game,
   when,
   description,
   hostId,
   participants,
-}) {
+}: CompletedSessionEmbedData): EmbedBuilder {
   const embed = new EmbedBuilder()
     .setColor(0x57f287)
     .setTitle(`${game.emoji ?? "🎮"} Session terminée • ${game.name}`)
@@ -160,7 +227,7 @@ export function buildCompletedSessionEmbed({
         inline: true,
       },
       {
-        name: `✅ Participants (${participants?.size ?? 0})`,
+        name: `✅ Participants (${participants.size})`,
         value: formatUsers(participants),
         inline: false,
       },
@@ -181,7 +248,12 @@ export function buildCompletedSessionEmbed({
   return embed;
 }
 
-export function buildSessionHistoryEmbed(sessions) {
+/**
+ * Construit l'historique des dernières sessions d'un serveur.
+ */
+export function buildSessionHistoryEmbed(
+  sessions: SessionHistoryEntry[],
+): EmbedBuilder {
   const embed = new EmbedBuilder()
     .setColor(0x5865f2)
     .setTitle("📚 Historique des sessions")

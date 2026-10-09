@@ -3,17 +3,45 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
-const databaseUrl = new URL("../data/yolo.sqlite", import.meta.url);
-const databasePath = fileURLToPath(databaseUrl);
+/**
+ * Emplacement de la base SQLite persistante du bot.
+ *
+ * Le chemin est résolu relativement au projet afin que la base
+ * reste stockée dans `data/yolo.sqlite`.
+ */
+const DATABASE_URL = new URL("../data/yolo.sqlite", import.meta.url);
 
-mkdirSync(dirname(databasePath), {
+const DATABASE_PATH = fileURLToPath(DATABASE_URL);
+
+/**
+ * Garantit l'existence du dossier contenant la base avant
+ * l'ouverture de SQLite.
+ */
+mkdirSync(dirname(DATABASE_PATH), {
   recursive: true,
 });
 
-export const db = new DatabaseSync(databasePath, {
+/**
+ * Connexion SQLite partagée par les services de persistance.
+ *
+ * `DatabaseSync` est volontairement utilisé ici : les opérations
+ * effectuées par le bot sont petites et transactionnelles, et cette
+ * API évite d'ajouter une dépendance SQLite externe.
+ */
+export const db = new DatabaseSync(DATABASE_PATH, {
   timeout: 5000,
 });
 
+/**
+ * Initialisation du schéma.
+ *
+ * Cette opération est idempotente et peut être exécutée à chaque
+ * démarrage du bot.
+ *
+ * WAL améliore la robustesse des accès concurrents tandis que
+ * les clés étrangères garantissent notamment la suppression
+ * des membres lorsqu'une session disparaît.
+ */
 db.exec(`
   PRAGMA foreign_keys = ON;
   PRAGMA journal_mode = WAL;

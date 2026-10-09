@@ -1,4 +1,9 @@
-import { MessageFlags, SlashCommandBuilder } from "discord.js";
+import {
+  type AutocompleteInteraction,
+  type ChatInputCommandInteraction,
+  MessageFlags,
+  SlashCommandBuilder,
+} from "discord.js";
 
 import {
   getGameById,
@@ -17,6 +22,17 @@ import {
 
 import { buildSessionButtons } from "../../features/sessions/sessions.buttons.js";
 
+/**
+ * Définition de la commande `/session`.
+ *
+ * Cette commande constitue le point d'entrée utilisateur
+ * de la fonctionnalité de sessions de jeu.
+ *
+ * Sous-commandes disponibles :
+ *
+ * - `/session create` : crée une nouvelle session ;
+ * - `/session history` : affiche les dernières sessions du serveur.
+ */
 export const data = new SlashCommandBuilder()
   .setName("session")
   .setDescription("Gestion des sessions de jeu")
@@ -66,25 +82,46 @@ export const data = new SlashCommandBuilder()
       ),
   );
 
-export async function autocomplete(interaction) {
+/**
+ * Fournit les suggestions de jeux disponibles à Discord.
+ *
+ * Seule l'option `jeu` utilise l'autocomplétion.
+ * Discord accepte au maximum 25 suggestions ; cette limite est
+ * déjà appliquée par `searchEnabledGames`.
+ *
+ * @param interaction Interaction d'autocomplétion reçue.
+ */
+export async function autocomplete(
+  interaction: AutocompleteInteraction,
+): Promise<void> {
   const focused = interaction.options.getFocused(true);
 
   if (focused.name !== "jeu") {
     await interaction.respond([]);
+
     return;
   }
 
-  const games = searchEnabledGames(focused.value);
+  const games = searchEnabledGames(String(focused.value));
 
   await interaction.respond(
     games.map((game) => ({
-      name: `${game.emoji ?? "🎮"} ${game.name}`,
+      name: `${game.emoji || "🎮"} ${game.name}`,
       value: game.id,
     })),
   );
 }
 
-async function createGameSession(interaction) {
+/**
+ * Crée une nouvelle session de jeu.
+ *
+ * Le message Discord est créé avant l'enregistrement SQLite
+ * afin de pouvoir utiliser son identifiant comme référence
+ * persistante de la session.
+ */
+async function createGameSession(
+  interaction: ChatInputCommandInteraction,
+): Promise<void> {
   if (!interaction.guildId || !interaction.channelId) {
     await interaction.reply({
       content: "❌ Les sessions doivent être créées dans un serveur Discord.",
@@ -111,9 +148,9 @@ async function createGameSession(interaction) {
     return;
   }
 
-  const participants = new Set([interaction.user.id]);
+  const participants = new Set<string>([interaction.user.id]);
 
-  const maybes = new Set();
+  const maybes = new Set<string>();
 
   const embed = buildSessionEmbed({
     game,
@@ -146,7 +183,12 @@ async function createGameSession(interaction) {
   });
 }
 
-async function showSessionHistory(interaction) {
+/**
+ * Affiche l'historique des sessions du serveur courant.
+ */
+async function showSessionHistory(
+  interaction: ChatInputCommandInteraction,
+): Promise<void> {
   if (!interaction.guildId) {
     await interaction.reply({
       content:
@@ -168,16 +210,25 @@ async function showSessionHistory(interaction) {
   });
 }
 
-export async function execute(interaction) {
+/**
+ * Exécute la sous-commande `/session` demandée.
+ *
+ * @param interaction Interaction Discord associée à la commande.
+ */
+export async function execute(
+  interaction: ChatInputCommandInteraction,
+): Promise<void> {
   const subcommand = interaction.options.getSubcommand();
 
   switch (subcommand) {
     case "create":
       await createGameSession(interaction);
+
       return;
 
     case "history":
       await showSessionHistory(interaction);
+
       return;
 
     default:
