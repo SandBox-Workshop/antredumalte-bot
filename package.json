@@ -10,7 +10,8 @@
     "dev": "tsx watch index.js",
     "lint": "eslint .",
     "release": "release-it",
-    "release:dry": "release-it --dry-run"
+    "release:dry": "release-it --dry-run",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [
     "discord",
@@ -33,8 +34,10 @@
     "@release-it/conventional-changelog": "^11.0.1",
     "@types/node": "^26.6.4",
     "eslint": "^10.5.0",
+    "globals": "^17.13.0",
     "release-it": "^20.2.0",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2"
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.1"
   }
 }

@@ -8,20 +8,14 @@ import {
   MessageFlags,
 } from "discord.js";
 
-import {
-  handleSessionButton,
-  handleSessionEditModal,
-  handleSessionGameSelect,
-  handleSessionHostSelect,
-} from "../features/sessions/sessions.buttons.js";
+import { routeFeatureInteraction } from "../interactions/router.js";
 
 /**
  * Contrat minimal d'une commande enregistrée dans le bot.
  *
- * Les commandes peuvent gérer :
- *
- * - leur exécution principale avec `execute` ;
- * - l'autocomplétion Discord avec `autocomplete`, si nécessaire.
+ * Une commande doit fournir une méthode `execute`.
+ * Elle peut également exposer une méthode `autocomplete`
+ * lorsqu'elle utilise l'autocomplétion Discord.
  */
 type CommandModule = {
   execute: (
@@ -34,40 +28,36 @@ type CommandModule = {
 };
 
 /**
- * Extension locale du client Discord.
+ * Client Discord enrichi avec le registre des commandes du bot.
  *
- * Le bot attache dynamiquement une collection `commands`
- * au client lors de son initialisation.
+ * La collection `commands` est ajoutée au client pendant
+ * l'initialisation dans `index.js`.
  */
 type BotClient = Client & {
   commands: Collection<string, CommandModule>;
 };
 
 /**
- * Codes d'erreurs Discord ignorés volontairement.
+ * Codes d'erreurs Discord pouvant être ignorés.
  *
  * - `10062` : interaction inconnue ou expirée ;
  * - `40060` : interaction déjà acquittée.
- *
- * Ces erreurs peuvent notamment apparaître lorsqu'une interaction
- * expire avant que Discord ne reçoive une réponse.
  */
 const IGNORED_INTERACTION_ERRORS = new Set([10062, 40060]);
 
 /**
- * Nom de l'événement traité par ce module.
+ * Nom de l'événement Discord traité par ce module.
  */
 export const name = Events.InteractionCreate;
 
 /**
- * Extrait un éventuel code numérique depuis une erreur inconnue.
+ * Extrait le code numérique éventuel d'une erreur.
  *
- * Les erreurs capturées sont de type `unknown` en TypeScript.
- * Cette fonction permet donc de vérifier proprement les codes
- * d'erreur Discord sans utiliser `any`.
+ * Les erreurs capturées sont volontairement traitées comme `unknown`
+ * afin d'éviter l'utilisation de `any`.
  *
  * @param error Erreur à analyser.
- * @returns Code numérique de l'erreur, s'il existe.
+ * @returns Code numérique de l'erreur lorsqu'il existe.
  */
 function getErrorCode(error: unknown): number | undefined {
   if (typeof error !== "object" || error === null || !("code" in error)) {
@@ -84,8 +74,10 @@ function getErrorCode(error: unknown): number | undefined {
 }
 
 /**
- * Indique si une erreur Discord peut être ignorée sans action
- * supplémentaire.
+ * Vérifie si une erreur Discord fait partie des erreurs
+ * volontairement ignorées.
+ *
+ * @param error Erreur à analyser.
  */
 function isIgnoredInteractionError(error: unknown): boolean {
   const code = getErrorCode(error);
@@ -94,8 +86,10 @@ function isIgnoredInteractionError(error: unknown): boolean {
 }
 
 /**
- * Récupère une commande enregistrée sur le client à partir
- * du nom contenu dans une interaction Discord.
+ * Recherche la commande correspondant à une interaction.
+ *
+ * @param interaction Interaction Discord contenant un nom de commande.
+ * @returns Module de commande enregistré, s'il existe.
  */
 function getCommand(
   interaction: ChatInputCommandInteraction | AutocompleteInteraction,
@@ -106,7 +100,10 @@ function getCommand(
 }
 
 /**
- * Traite l'autocomplétion d'une commande slash.
+ * Traite une interaction d'autocomplétion.
+ *
+ * Lorsqu'une commande ne fournit aucun handler d'autocomplétion,
+ * une liste vide est renvoyée à Discord.
  */
 async function handleAutocomplete(
   interaction: AutocompleteInteraction,
@@ -115,6 +112,7 @@ async function handleAutocomplete(
 
   if (!command?.autocomplete) {
     await interaction.respond([]);
+
     return;
   }
 
@@ -122,7 +120,7 @@ async function handleAutocomplete(
 }
 
 /**
- * Exécute une commande slash enregistrée dans le bot.
+ * Exécute une commande slash enregistrée.
  */
 async function handleChatInputCommand(
   interaction: ChatInputCommandInteraction,
@@ -142,23 +140,22 @@ async function handleChatInputCommand(
 }
 
 /**
- * Envoie une réponse d'erreur générique lorsque le traitement
- * d'une interaction échoue.
+ * Envoie une réponse d'erreur générique à Discord.
  *
- * La méthode utilisée dépend de l'état de l'interaction :
+ * Si l'interaction a déjà reçu une première réponse,
+ * un `followUp` est utilisé à la place d'un `reply`.
  *
- * - `reply` si aucune réponse n'a encore été envoyée ;
- * - `followUp` si l'interaction a déjà été acquittée.
+ * Les interactions non répondables sont ignorées.
  */
 async function replyWithError(interaction: Interaction): Promise<void> {
+  if (!interaction.isRepliable()) {
+    return;
+  }
+
   const payload = {
     content: "❌ Une erreur est arrivée pendant l'interaction.",
     flags: MessageFlags.Ephemeral,
   } as const;
-
-  if (!interaction.isRepliable()) {
-    return;
-  }
 
   if (interaction.deferred || interaction.replied) {
     await interaction.followUp(payload);
@@ -170,57 +167,26 @@ async function replyWithError(interaction: Interaction): Promise<void> {
 }
 
 /**
- * Route toutes les interactions reçues par le bot.
+ * Point d'entrée principal de toutes les interactions Discord.
  *
- * Les interactions propres aux fonctionnalités sont traitées avant
- * les commandes slash générales.
+ * Le traitement est volontairement séparé en deux niveaux :
  *
- * Ordre actuel :
+ * 1. les interactions spécifiques aux features sont envoyées
+ *    au routeur générique ;
+ * 2. les interactions de commandes restent gérées par le
+ *    système central de commandes.
  *
- * 1. boutons de session ;
- * 2. sélection du nouvel hôte ;
- * 3. sélection du jeu ;
- * 4. modal d'édition ;
- * 5. autocomplétion ;
- * 6. commandes slash.
- *
- * Les handlers de feature retournent un booléen permettant d'indiquer
- * si l'interaction a déjà été prise en charge.
+ * Cela évite que cet event dépende directement des différentes
+ * fonctionnalités du bot.
  *
  * @param interaction Interaction Discord reçue.
  */
 export async function execute(interaction: Interaction): Promise<void> {
   try {
-    if (interaction.isButton()) {
-      const handled = await handleSessionButton(interaction);
+    const featureHandled = await routeFeatureInteraction(interaction);
 
-      if (handled) {
-        return;
-      }
-    }
-
-    if (interaction.isUserSelectMenu()) {
-      const handled = await handleSessionHostSelect(interaction);
-
-      if (handled) {
-        return;
-      }
-    }
-
-    if (interaction.isStringSelectMenu()) {
-      const handled = await handleSessionGameSelect(interaction);
-
-      if (handled) {
-        return;
-      }
-    }
-
-    if (interaction.isModalSubmit()) {
-      const handled = await handleSessionEditModal(interaction);
-
-      if (handled) {
-        return;
-      }
+    if (featureHandled) {
+      return;
     }
 
     if (interaction.isAutocomplete()) {
@@ -243,7 +209,7 @@ export async function execute(interaction: Interaction): Promise<void> {
       try {
         await interaction.respond([]);
       } catch {
-        // L'interaction a probablement expiré.
+        // Interaction expirée ou déjà acquittée.
       }
 
       return;
