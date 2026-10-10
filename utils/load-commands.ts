@@ -1,6 +1,6 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import type { BotCommand } from "../types/command.js";
 
@@ -12,6 +12,13 @@ import type { BotCommand } from "../types/command.js";
  * TypeScript peuvent cohabiter.
  */
 const COMMAND_EXTENSIONS = new Set([".js", ".ts"]);
+
+/**
+ * Dossier des commandes résolu depuis ce module plutôt que depuis
+ * le dossier courant du processus. Cela évite qu'un lancement via
+ * PM2 depuis un autre `cwd` casse la découverte des commandes.
+ */
+const COMMANDS_DIR = fileURLToPath(new URL("../commands/", import.meta.url));
 
 /**
  * Vérifie si un fichier peut contenir une commande exécutable.
@@ -137,9 +144,7 @@ function isValidCommandModule(value: unknown): value is BotCommand {
  * @returns Liste des commandes valides découvertes dans `commands/`.
  */
 export async function loadCommands(): Promise<BotCommand[]> {
-  const commandsPath = path.join(process.cwd(), "commands");
-
-  const commandFiles = getCommandFiles(commandsPath);
+  const commandFiles = getCommandFiles(COMMANDS_DIR);
 
   const commands: BotCommand[] = [];
 
