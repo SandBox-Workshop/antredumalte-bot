@@ -52,6 +52,14 @@ const GAME_PREFIX = "session:game:";
 const EDIT_PREFIX = "session:edit:";
 
 /**
+ * Codes Discord indiquant qu'un salon ou un message n'existe plus.
+ *
+ * - 10003 : Unknown Channel
+ * - 10008 : Unknown Message
+ */
+const MISSING_DISCORD_RESOURCE_CODES = new Set([10003, 10008]);
+
+/**
  * Garantit qu'une opération métier a retourné
  * une session valide.
  */
@@ -83,22 +91,59 @@ function getCustomIdValue(customId: string, prefix: string): string | null {
 }
 
 /**
+ * Extrait le code numérique éventuel d'une erreur Discord.
+ *
+ * @param error Erreur inconnue à analyser.
+ * @returns Code Discord lorsqu'il est disponible.
+ */
+function getDiscordErrorCode(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return undefined;
+  }
+
+  const code = (error as { code?: unknown }).code;
+
+  return typeof code === "number" ? code : undefined;
+}
+
+/**
+ * Indique si Discord signale qu'un salon ou un message n'existe plus.
+ */
+function isMissingDiscordResourceError(error: unknown): boolean {
+  const code = getDiscordErrorCode(error);
+
+  return code !== undefined && MISSING_DISCORD_RESOURCE_CODES.has(code);
+}
+
+/**
  * Retrouve le message Discord public associé à une session.
  *
  * Les interactions du panneau de gestion sont éphémères.
  * Elles ne proviennent donc plus directement du message public.
+ *
+ * Un salon ou un message supprimé est traité comme une ressource absente
+ * et retourne `null`. Les autres erreurs Discord sont relancées afin de ne
+ * pas masquer un problème de permissions, de réseau ou d'API.
  */
 async function fetchSessionMessage(
   interaction: Interaction,
   session: GameSession,
 ): Promise<Message | null> {
-  const channel = await interaction.client.channels.fetch(session.channelId);
+  try {
+    const channel = await interaction.client.channels.fetch(session.channelId);
 
-  if (!channel || !channel.isTextBased() || !("messages" in channel)) {
-    return null;
+    if (!channel || !channel.isTextBased() || !("messages" in channel)) {
+      return null;
+    }
+
+    return await channel.messages.fetch(session.messageId);
+  } catch (error: unknown) {
+    if (isMissingDiscordResourceError(error)) {
+      return null;
+    }
+
+    throw error;
   }
-
-  return channel.messages.fetch(session.messageId);
 }
 
 /**
@@ -492,20 +537,15 @@ export async function handleSessionButton(
         return true;
       }
 
-      const completedSession = requireSession(
-        completeSession(messageId),
-        "la clôture",
-      );
-
       /*
-       * Nouveau bouton privé :
-       * il faut modifier le message public séparément.
+       * Pour les nouveaux boutons de gestion privés, on vérifie d'abord
+       * que le message public existe encore. La base ne doit pas passer
+       * à `completed` si Discord ne peut déjà plus retrouver la session.
        */
+      let sessionMessage: Message | null = null;
+
       if (referencedMessageId) {
-        const sessionMessage = await fetchSessionMessage(
-          interaction,
-          completedSession,
-        );
+        sessionMessage = await fetchSessionMessage(interaction, currentSession);
 
         if (!sessionMessage) {
           await interaction.update({
@@ -515,7 +555,14 @@ export async function handleSessionButton(
 
           return true;
         }
+      }
 
+      const completedSession = requireSession(
+        completeSession(messageId),
+        "la clôture",
+      );
+
+      if (sessionMessage) {
         await sessionMessage.edit({
           embeds: [buildCompletedSessionEmbed(completedSession)],
           components: [],
@@ -551,16 +598,14 @@ export async function handleSessionButton(
         return true;
       }
 
-      const cancelledSession = requireSession(
-        cancelSession(messageId),
-        "l'annulation",
-      );
+      /*
+       * Même garantie que pour `complete` : on valide la présence du
+       * message Discord avant de modifier l'état persistant.
+       */
+      let sessionMessage: Message | null = null;
 
       if (referencedMessageId) {
-        const sessionMessage = await fetchSessionMessage(
-          interaction,
-          cancelledSession,
-        );
+        sessionMessage = await fetchSessionMessage(interaction, currentSession);
 
         if (!sessionMessage) {
           await interaction.update({
@@ -570,7 +615,14 @@ export async function handleSessionButton(
 
           return true;
         }
+      }
 
+      const cancelledSession = requireSession(
+        cancelSession(messageId),
+        "l'annulation",
+      );
+
+      if (sessionMessage) {
         await sessionMessage.edit({
           embeds: [buildCancelledSessionEmbed(cancelledSession)],
           components: [],
