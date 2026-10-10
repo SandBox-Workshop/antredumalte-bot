@@ -1,5 +1,40 @@
-node_modules
-config/config.json
-data
+# Dependencies
+node_modules/
+
+# Environment & secrets
 .env
+.env.*
+!.env.example
+config/config.json
 google-service-account.json
+
+# Runtime data
+data/*.sqlite*
+data/faille-*.json
+
+# TypeScript / build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Tests / coverage
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Tool caches / temporary files
+.eslintcache
+.cache/
+tmp/
+temp/
+*.tmp
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
