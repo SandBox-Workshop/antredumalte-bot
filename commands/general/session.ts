@@ -186,18 +186,58 @@ async function createGameSession(
 
   const message = await interaction.fetchReply();
 
-  createSession(message.id, {
-    guildId: interaction.guildId,
+  try {
+    createSession(message.id, {
+      guildId: interaction.guildId,
 
-    channelId: interaction.channelId,
+      channelId: interaction.channelId,
 
-    game,
-    when,
-    scheduledAt,
-    description,
+      game,
+      when,
+      scheduledAt,
+      description,
 
-    creatorId: interaction.user.id,
-  });
+      creatorId: interaction.user.id,
+    });
+  } catch (error: unknown) {
+    console.error(
+      "[sessions] Impossible d'enregistrer la session en base.",
+      error,
+    );
+
+    try {
+      await message.delete();
+    } catch (deleteError: unknown) {
+      console.error(
+        "[sessions] Impossible de supprimer le message après l'échec de persistance.",
+        deleteError,
+      );
+
+      /*
+       * Si Discord refuse la suppression, on neutralise au minimum
+       * le message afin de ne pas laisser de boutons sans session en base.
+       */
+      try {
+        await message.edit({
+          content:
+            "❌ Cette session n'a pas pu être enregistrée et n'est pas active.",
+          embeds: [],
+          components: [],
+        });
+      } catch (editError: unknown) {
+        console.error(
+          "[sessions] Impossible de neutraliser le message de session.",
+          editError,
+        );
+      }
+    }
+
+    await interaction.followUp({
+      content:
+        "❌ Impossible d'enregistrer la session. Aucun événement actif n'a été créé.",
+      flags: MessageFlags.Ephemeral,
+    });
+  }
 }
 
 async function showSessionHistory(
