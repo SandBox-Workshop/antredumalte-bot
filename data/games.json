@@ -1,0 +1,38 @@
+[
+  {
+    "id": "vrising",
+    "name": "V Rising",
+    "emoji": "🧛",
+    "enabled": false
+  },
+  {
+    "id": "minecraft",
+    "name": "Minecraft",
+    "emoji": "⛏️",
+    "enabled": false
+  },
+  {
+    "id": "project-zomboid",
+    "name": "Project Zomboid",
+    "emoji": "🧟",
+    "enabled": false
+  },
+  {
+    "id": "aska",
+    "name": "ASKA",
+    "emoji": "🪓",
+    "enabled": false
+  },
+  {
+    "id": "deep-rock-galactic",
+    "name": "Deep Rock Galactic",
+    "emoji": "⛏️",
+    "enabled": true
+  },
+{
+    "id": "rv-there-yet?",
+    "name": "RV There Yet?",
+    "emoji": "🚍",
+    "enabled": true
+}
+]
