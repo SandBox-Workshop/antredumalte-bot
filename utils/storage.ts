@@ -1,12 +1,13 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * Dossier principal utilisé pour les données persistantes
  * stockées localement par le bot.
  */
-export const DATA_DIR = path.join(process.cwd(), "data");
+export const DATA_DIR = fileURLToPath(new URL("../data/", import.meta.url));
 
 /**
  * Lit et parse un fichier JSON.

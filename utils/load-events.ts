@@ -1,6 +1,6 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 /**
  * Contrat minimal d'un module d'événement chargé par le bot.
@@ -37,6 +37,13 @@ export type EventModule = {
  * TypeScript peuvent cohabiter.
  */
 const EVENT_EXTENSIONS = new Set([".js", ".ts"]);
+
+/**
+ * Dossier des événements résolu depuis ce module plutôt que depuis
+ * le dossier courant du processus. Cela garantit le chargement même
+ * lorsque PM2 démarre le bot depuis un autre `cwd`.
+ */
+const EVENTS_DIR = fileURLToPath(new URL("../events/", import.meta.url));
 
 /**
  * Vérifie si un fichier peut être chargé comme événement.
@@ -128,9 +135,7 @@ function isValidEventModule(value: unknown): value is EventModule {
  * @returns Liste des événements valides découverts dans `events/`.
  */
 export async function loadEvents(): Promise<EventModule[]> {
-  const eventsPath = path.join(process.cwd(), "events");
-
-  const eventFiles = getEventFiles(eventsPath);
+  const eventFiles = getEventFiles(EVENTS_DIR);
 
   const events: EventModule[] = [];
 
