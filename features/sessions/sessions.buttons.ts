@@ -3,6 +3,8 @@ import {
   type ButtonInteraction,
   ButtonBuilder,
   ButtonStyle,
+  type Interaction,
+  type Message,
   MessageFlags,
   type ModalSubmitInteraction,
   ModalBuilder,
@@ -32,28 +34,26 @@ import {
 import type { GameSession } from "../../types/session.js";
 
 import {
+  formatSessionDateInput,
+  formatSessionLegacyWhen,
+  formatSessionTimeInput,
+  parseSessionDateTime,
+} from "../../utils/session-date.js";
+
+import {
   buildCancelledSessionEmbed,
   buildCompletedSessionEmbed,
   buildSessionEmbed,
 } from "./sessions.embed.js";
 
-/**
- * Préfixes utilisés par les composants interactifs
- * de la feature sessions.
- */
 const SESSION_PREFIX = "session:";
 const TRANSFER_PREFIX = "session:transfer:";
 const GAME_PREFIX = "session:game:";
 const EDIT_PREFIX = "session:edit:";
 
 /**
- * Garantit qu'une opération censée retourner une session
- * a effectivement produit une session valide.
- *
- * Lorsqu'une session existait immédiatement avant l'opération,
- * un résultat `null` représente un état inattendu. Lever une erreur
- * permet au gestionnaire global d'interactions de traiter proprement
- * cette situation plutôt que de transmettre `null` à un embed.
+ * Garantit qu'une opération métier a retourné
+ * une session valide.
  */
 function requireSession(
   session: GameSession | null,
@@ -67,7 +67,7 @@ function requireSession(
 }
 
 /**
- * Extrait la partie variable d'un `customId`.
+ * Extrait la valeur située après un préfixe de customId.
  *
  * @example
  * `session:game:123` avec `session:game:` retourne `123`.
@@ -83,13 +83,33 @@ function getCustomIdValue(customId: string, prefix: string): string | null {
 }
 
 /**
- * Construit les boutons permanents affichés sous une session active.
+ * Retrouve le message Discord public associé à une session.
+ *
+ * Les interactions du panneau de gestion sont éphémères.
+ * Elles ne proviennent donc plus directement du message public.
  */
-export function buildSessionButtons(): [
-  ActionRowBuilder<ButtonBuilder>,
-  ActionRowBuilder<ButtonBuilder>,
-] {
-  const participationRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+async function fetchSessionMessage(
+  interaction: Interaction,
+  session: GameSession,
+): Promise<Message | null> {
+  const channel = await interaction.client.channels.fetch(session.channelId);
+
+  if (!channel || !channel.isTextBased() || !("messages" in channel)) {
+    return null;
+  }
+
+  return channel.messages.fetch(session.messageId);
+}
+
+/**
+ * Construit les boutons publics d'une session.
+ *
+ * Ces actions sont les seules pertinentes pour tous les membres.
+ * Les fonctions réservées à l'hôte sont déplacées dans
+ * un panneau de gestion éphémère.
+ */
+export function buildSessionButtons(): [ActionRowBuilder<ButtonBuilder>] {
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId("session:join")
       .setLabel("Rejoindre")
@@ -107,46 +127,63 @@ export function buildSessionButtons(): [
       .setLabel("Quitter")
       .setEmoji("❌")
       .setStyle(ButtonStyle.Secondary),
+
+    new ButtonBuilder()
+      .setCustomId("session:manage")
+      .setLabel("Gérer")
+      .setEmoji("⚙️")
+      .setStyle(ButtonStyle.Primary),
   );
 
-  const managementRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+  return [row];
+}
+
+/**
+ * Construit les actions réservées à l'hôte.
+ *
+ * L'identifiant du message public est inclus dans chaque customId
+ * car ces boutons sont envoyés dans une réponse éphémère distincte.
+ */
+function buildSessionManagementButtons(
+  messageId: string,
+): [ActionRowBuilder<ButtonBuilder>] {
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setCustomId("session:edit")
+      .setCustomId(`session:edit:${messageId}`)
       .setLabel("Modifier")
       .setEmoji("✏️")
       .setStyle(ButtonStyle.Secondary),
 
     new ButtonBuilder()
-      .setCustomId("session:game")
+      .setCustomId(`session:game:${messageId}`)
       .setLabel("Changer le jeu")
       .setEmoji("🎮")
       .setStyle(ButtonStyle.Secondary),
 
     new ButtonBuilder()
-      .setCustomId("session:transfer")
+      .setCustomId(`session:transfer:${messageId}`)
       .setLabel("Changer d'hôte")
       .setEmoji("👑")
       .setStyle(ButtonStyle.Primary),
 
     new ButtonBuilder()
-      .setCustomId("session:complete")
+      .setCustomId(`session:complete:${messageId}`)
       .setLabel("Terminer")
       .setEmoji("✅")
       .setStyle(ButtonStyle.Success),
 
     new ButtonBuilder()
-      .setCustomId("session:cancel")
+      .setCustomId(`session:cancel:${messageId}`)
       .setLabel("Annuler")
       .setEmoji("🗑️")
       .setStyle(ButtonStyle.Danger),
   );
 
-  return [participationRow, managementRow];
+  return [row];
 }
 
 /**
- * Construit le menu permettant à l'hôte
- * de transférer sa session.
+ * Menu permettant de choisir le nouvel hôte.
  */
 function buildHostSelect(
   messageId: string,
@@ -161,9 +198,7 @@ function buildHostSelect(
 }
 
 /**
- * Construit le menu de changement de jeu.
- *
- * Discord limite les menus de sélection à 25 options.
+ * Menu permettant de choisir un nouveau jeu.
  */
 function buildGameSelect(
   messageId: string,
@@ -195,20 +230,34 @@ function buildGameSelect(
 }
 
 /**
- * Construit le modal d'édition d'une session.
+ * Construit le formulaire de modification d'une session.
  */
 function buildEditModal(session: GameSession): ModalBuilder {
   const modal = new ModalBuilder()
     .setCustomId(`${EDIT_PREFIX}${session.messageId}`)
     .setTitle("Modifier la session");
 
-  const whenInput = new TextInputBuilder()
-    .setCustomId("when")
-    .setLabel("Quand ?")
+  const dateInput = new TextInputBuilder()
+    .setCustomId("date")
+    .setLabel("Date (JJ/MM/AAAA)")
+    .setPlaceholder("12/10/2026")
     .setStyle(TextInputStyle.Short)
     .setRequired(true)
-    .setMaxLength(100)
-    .setValue(session.when);
+    .setMaxLength(10);
+
+  const timeInput = new TextInputBuilder()
+    .setCustomId("heure")
+    .setLabel("Heure (HH:MM)")
+    .setPlaceholder("21:00")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(5);
+
+  if (session.scheduledAt !== null) {
+    dateInput.setValue(formatSessionDateInput(session.scheduledAt));
+
+    timeInput.setValue(formatSessionTimeInput(session.scheduledAt));
+  }
 
   const descriptionInput = new TextInputBuilder()
     .setCustomId("description")
@@ -222,7 +271,9 @@ function buildEditModal(session: GameSession): ModalBuilder {
   }
 
   modal.addComponents(
-    new ActionRowBuilder<TextInputBuilder>().addComponents(whenInput),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(dateInput),
+
+    new ActionRowBuilder<TextInputBuilder>().addComponents(timeInput),
 
     new ActionRowBuilder<TextInputBuilder>().addComponents(descriptionInput),
   );
@@ -231,9 +282,7 @@ function buildEditModal(session: GameSession): ModalBuilder {
 }
 
 /**
- * Traite les boutons permanents d'une session.
- *
- * @returns `true` lorsque le bouton appartient à la feature sessions.
+ * Traite les boutons de session publics et privés.
  */
 export async function handleSessionButton(
   interaction: ButtonInteraction,
@@ -242,7 +291,20 @@ export async function handleSessionButton(
     return false;
   }
 
-  const messageId = interaction.message.id;
+  const parts = interaction.customId.split(":");
+
+  const action = parts[1];
+
+  const referencedMessageId = parts[2];
+
+  /*
+   * Bouton public :
+   * l'interaction provient directement du message de session.
+   *
+   * Bouton de gestion :
+   * l'identifiant du message public est inclus dans le customId.
+   */
+  const messageId = referencedMessageId ?? interaction.message.id;
 
   const userId = interaction.user.id;
 
@@ -256,10 +318,6 @@ export async function handleSessionButton(
 
     return true;
   }
-
-  const action = interaction.customId
-    .slice(SESSION_PREFIX.length)
-    .split(":")[0];
 
   if (
     userId === currentSession.hostId &&
@@ -306,12 +364,31 @@ export async function handleSessionButton(
     case "leave": {
       const session = requireSession(
         leaveSession(messageId, userId),
-        "le départ du participant",
+        "le départ",
       );
 
       await interaction.update({
         embeds: [buildSessionEmbed(session)],
         components: buildSessionButtons(),
+      });
+
+      return true;
+    }
+
+    case "manage": {
+      if (userId !== currentSession.hostId) {
+        await interaction.reply({
+          content: "❌ Seul l'hôte peut gérer cette session.",
+          flags: MessageFlags.Ephemeral,
+        });
+
+        return true;
+      }
+
+      await interaction.reply({
+        content: "⚙️ **Gestion de la session**",
+        components: buildSessionManagementButtons(messageId),
+        flags: MessageFlags.Ephemeral,
       });
 
       return true;
@@ -353,11 +430,18 @@ export async function handleSessionButton(
         return true;
       }
 
-      await interaction.reply({
-        content: "🎮 Choisis le nouveau jeu de la session :",
-        components: [buildGameSelect(messageId, currentSession.game.id)],
-        flags: MessageFlags.Ephemeral,
-      });
+      if (referencedMessageId) {
+        await interaction.update({
+          content: "🎮 Choisis le nouveau jeu de la session :",
+          components: [buildGameSelect(messageId, currentSession.game.id)],
+        });
+      } else {
+        await interaction.reply({
+          content: "🎮 Choisis le nouveau jeu de la session :",
+          components: [buildGameSelect(messageId, currentSession.game.id)],
+          flags: MessageFlags.Ephemeral,
+        });
+      }
 
       return true;
     }
@@ -382,11 +466,18 @@ export async function handleSessionButton(
         return true;
       }
 
-      await interaction.reply({
-        content: "👑 Choisis le participant qui deviendra le nouvel hôte :",
-        components: [buildHostSelect(messageId)],
-        flags: MessageFlags.Ephemeral,
-      });
+      if (referencedMessageId) {
+        await interaction.update({
+          content: "👑 Choisis le participant qui deviendra le nouvel hôte :",
+          components: [buildHostSelect(messageId)],
+        });
+      } else {
+        await interaction.reply({
+          content: "👑 Choisis le participant qui deviendra le nouvel hôte :",
+          components: [buildHostSelect(messageId)],
+          flags: MessageFlags.Ephemeral,
+        });
+      }
 
       return true;
     }
@@ -406,6 +497,42 @@ export async function handleSessionButton(
         "la clôture",
       );
 
+      /*
+       * Nouveau bouton privé :
+       * il faut modifier le message public séparément.
+       */
+      if (referencedMessageId) {
+        const sessionMessage = await fetchSessionMessage(
+          interaction,
+          completedSession,
+        );
+
+        if (!sessionMessage) {
+          await interaction.update({
+            content: "❌ Impossible de retrouver le message de la session.",
+            components: [],
+          });
+
+          return true;
+        }
+
+        await sessionMessage.edit({
+          embeds: [buildCompletedSessionEmbed(completedSession)],
+          components: [],
+        });
+
+        await interaction.update({
+          content: "✅ Session terminée.",
+          components: [],
+        });
+
+        return true;
+      }
+
+      /*
+       * Compatibilité avec les anciens messages de session
+       * qui possèdent encore le bouton public "Terminer".
+       */
       await interaction.update({
         embeds: [buildCompletedSessionEmbed(completedSession)],
         components: [],
@@ -429,6 +556,34 @@ export async function handleSessionButton(
         "l'annulation",
       );
 
+      if (referencedMessageId) {
+        const sessionMessage = await fetchSessionMessage(
+          interaction,
+          cancelledSession,
+        );
+
+        if (!sessionMessage) {
+          await interaction.update({
+            content: "❌ Impossible de retrouver le message de la session.",
+            components: [],
+          });
+
+          return true;
+        }
+
+        await sessionMessage.edit({
+          embeds: [buildCancelledSessionEmbed(cancelledSession)],
+          components: [],
+        });
+
+        await interaction.update({
+          content: "🚫 Session annulée.",
+          components: [],
+        });
+
+        return true;
+      }
+
       await interaction.update({
         embeds: [buildCancelledSessionEmbed(cancelledSession)],
         components: [],
@@ -443,7 +598,7 @@ export async function handleSessionButton(
 }
 
 /**
- * Traite le menu de transfert d'hôte.
+ * Traite la sélection du nouvel hôte.
  */
 export async function handleSessionHostSelect(
   interaction: UserSelectMenuInteraction,
@@ -503,21 +658,21 @@ export async function handleSessionHostSelect(
     return true;
   }
 
-  if (!interaction.channel) {
+  const session = requireSession(
+    transferSessionHost(messageId, newHostId),
+    "le transfert d'hôte",
+  );
+
+  const sessionMessage = await fetchSessionMessage(interaction, session);
+
+  if (!sessionMessage) {
     await interaction.update({
-      content: "❌ Impossible de retrouver le salon de la session.",
+      content: "❌ Impossible de retrouver le message de la session.",
       components: [],
     });
 
     return true;
   }
-
-  const sessionMessage = await interaction.channel.messages.fetch(messageId);
-
-  const session = requireSession(
-    transferSessionHost(messageId, newHostId),
-    "le transfert d'hôte",
-  );
 
   await sessionMessage.edit({
     embeds: [buildSessionEmbed(session)],
@@ -533,7 +688,7 @@ export async function handleSessionHostSelect(
 }
 
 /**
- * Traite le menu permettant de changer le jeu d'une session.
+ * Traite la sélection d'un nouveau jeu.
  */
 export async function handleSessionGameSelect(
   interaction: StringSelectMenuInteraction,
@@ -600,16 +755,16 @@ export async function handleSessionGameSelect(
     "le changement de jeu",
   );
 
-  if (!interaction.channel) {
+  const sessionMessage = await fetchSessionMessage(interaction, session);
+
+  if (!sessionMessage) {
     await interaction.update({
-      content: "❌ Impossible de retrouver le salon de la session.",
+      content: "❌ Impossible de retrouver le message de la session.",
       components: [],
     });
 
     return true;
   }
-
-  const sessionMessage = await interaction.channel.messages.fetch(messageId);
 
   await sessionMessage.edit({
     embeds: [buildSessionEmbed(session)],
@@ -625,7 +780,7 @@ export async function handleSessionGameSelect(
 }
 
 /**
- * Traite le modal de modification d'une session.
+ * Traite le formulaire de modification.
  */
 export async function handleSessionEditModal(
   interaction: ModalSubmitInteraction,
@@ -656,39 +811,57 @@ export async function handleSessionEditModal(
     return true;
   }
 
-  const when = interaction.fields.getTextInputValue("when").trim();
+  const date = interaction.fields.getTextInputValue("date").trim();
+
+  const time = interaction.fields.getTextInputValue("heure").trim();
 
   const description = interaction.fields
     .getTextInputValue("description")
     .trim();
 
-  if (!when) {
+  const scheduledAt = parseSessionDateTime(date, time);
+
+  if (scheduledAt === null) {
     await interaction.reply({
-      content: "❌ Le moment de la session ne peut pas être vide.",
+      content: "❌ Date ou heure invalide. Utilise `JJ/MM/AAAA` et `HH:MM`.",
       flags: MessageFlags.Ephemeral,
     });
 
     return true;
   }
 
+  const now = Math.floor(Date.now() / 1000);
+
+  if (scheduledAt <= now) {
+    await interaction.reply({
+      content: "❌ La session doit être prévue dans le futur.",
+      flags: MessageFlags.Ephemeral,
+    });
+
+    return true;
+  }
+
+  const when = formatSessionLegacyWhen(scheduledAt);
+
   const session = requireSession(
     updateSessionDetails(messageId, {
       when,
+      scheduledAt,
       description,
     }),
     "la modification",
   );
 
-  if (!interaction.channel) {
+  const sessionMessage = await fetchSessionMessage(interaction, session);
+
+  if (!sessionMessage) {
     await interaction.reply({
-      content: "❌ Impossible de retrouver le salon de la session.",
+      content: "❌ Impossible de retrouver le message de la session.",
       flags: MessageFlags.Ephemeral,
     });
 
     return true;
   }
-
-  const sessionMessage = await interaction.channel.messages.fetch(messageId);
 
   await sessionMessage.edit({
     embeds: [buildSessionEmbed(session)],
