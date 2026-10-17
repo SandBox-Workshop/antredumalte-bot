@@ -1,5 +1,7 @@
 export type SessionStatus = "active" | "cancelled" | "completed" | "deleted";
 
+export type SessionCloseStatus = "cancelled" | "completed";
+
 export type SessionMemberStatus = "joined" | "maybe" | "left";
 
 export type SessionGame = {
@@ -21,8 +23,7 @@ export type GameSession = {
   game: SessionGame;
 
   /**
-   * Ancienne valeur textuelle conservée
-   * pour compatibilité.
+   * Ancienne valeur textuelle conservée pour compatibilité.
    */
   when: string;
 
@@ -62,9 +63,7 @@ export type CreateSessionInput = {
   };
 
   when: string;
-
   scheduledAt: number;
-
   description?: string | null;
 
   creatorId: string;
@@ -107,3 +106,27 @@ export type SessionHistoryEntry = {
   completedAt: string | null;
   deletedAt: string | null;
 };
+
+/**
+ * Raisons métier pouvant empêcher une modification de session.
+ *
+ * Elles restent indépendantes de Discord : l'interface choisit ensuite
+ * le message à afficher à l'utilisateur.
+ */
+export type SessionMutationFailureReason =
+  | "session_not_found"
+  | "not_host"
+  | "host_cannot_leave"
+  | "host_cannot_maybe"
+  | "new_host_is_current_host"
+  | "new_host_must_be_participant";
+
+export type SessionMutationResult =
+  | {
+      ok: true;
+      session: GameSession;
+    }
+  | {
+      ok: false;
+      reason: SessionMutationFailureReason;
+    };

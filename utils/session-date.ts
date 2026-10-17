@@ -15,6 +15,16 @@ type ZonedDateTimeParts = {
   second: number;
 };
 
+export type SessionScheduleResolution =
+  | {
+      ok: true;
+      scheduledAt: number;
+    }
+  | {
+      ok: false;
+      message: string;
+    };
+
 const zonedFormatter = new Intl.DateTimeFormat("en-GB", {
   timeZone: SESSION_TIME_ZONE,
 
@@ -71,16 +81,13 @@ function getTimeZoneOffset(timestampMs: number): number {
 
 /**
  * Convertit une saisie `JJ/MM/AAAA` + `HH:MM`
- * en timestamp Unix.
- *
- * La saisie est interprétée dans le fuseau Europe/Paris.
+ * en timestamp Unix interprété dans le fuseau Europe/Paris.
  */
 export function parseSessionDateTime(
   dateText: string,
   timeText: string,
 ): number | null {
   const dateMatch = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(dateText.trim());
-
   const timeMatch = /^(\d{2}):(\d{2})$/.exec(timeText.trim());
 
   if (!dateMatch || !timeMatch) {
@@ -88,13 +95,9 @@ export function parseSessionDateTime(
   }
 
   const day = Number(dateMatch[1]);
-
   const month = Number(dateMatch[2]);
-
   const year = Number(dateMatch[3]);
-
   const hour = Number(timeMatch[1]);
-
   const minute = Number(timeMatch[2]);
 
   if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
@@ -115,6 +118,9 @@ export function parseSessionDateTime(
 
   let timestamp = localAsUtc - getTimeZoneOffset(localAsUtc);
 
+  /*
+   * Deuxième passe utile autour des changements heure d'été / heure d'hiver.
+   */
   timestamp = localAsUtc - getTimeZoneOffset(timestamp);
 
   const resolved = getZonedParts(timestamp);
@@ -130,6 +136,37 @@ export function parseSessionDateTime(
   }
 
   return Math.floor(timestamp / 1000);
+}
+
+/**
+ * Centralise la validation utilisée à la création et à l'édition.
+ */
+export function resolveSessionSchedule(
+  dateText: string,
+  timeText: string,
+  nowUnix = Math.floor(Date.now() / 1000),
+): SessionScheduleResolution {
+  const scheduledAt = parseSessionDateTime(dateText, timeText);
+
+  if (scheduledAt === null) {
+    return {
+      ok: false,
+      message:
+        "❌ Date ou heure invalide. Utilise `JJ/MM/AAAA` pour la date et `HH:MM` pour l'heure.",
+    };
+  }
+
+  if (scheduledAt <= nowUnix) {
+    return {
+      ok: false,
+      message: "❌ La session doit être prévue dans le futur.",
+    };
+  }
+
+  return {
+    ok: true,
+    scheduledAt,
+  };
 }
 
 export function formatSessionDateInput(timestamp: number): string {

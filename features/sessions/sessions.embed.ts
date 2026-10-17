@@ -1,10 +1,17 @@
-import { EmbedBuilder } from "discord.js";
-
 import type {
   GameSession,
   SessionHistoryEntry,
   SessionStatus,
 } from "../../types/session.js";
+import { DISCORD_THEME } from "../../config/discord-theme.js";
+import {
+  createEmbed,
+  gameLabel,
+} from "../../utils/discord-presentation.js";
+import {
+  discordTime,
+  discordTimeUnix,
+} from "../../utils/discord-time.js";
 
 export type SessionEmbedData = Pick<
   GameSession,
@@ -13,44 +20,75 @@ export type SessionEmbedData = Pick<
   | "scheduledAt"
   | "description"
   | "hostId"
+  | "status"
   | "participants"
   | "maybes"
->;
-
-export type CancelledSessionEmbedData = Pick<
-  GameSession,
-  "game" | "when" | "scheduledAt" | "description" | "hostId"
->;
-
-export type CompletedSessionEmbedData = Pick<
-  GameSession,
-  "game" | "when" | "scheduledAt" | "description" | "hostId" | "participants"
 >;
 
 type StatusDisplay = {
   emoji: string;
   label: string;
+  title: string;
+  footer: string;
+  color: number;
+  whenField: string;
+  hostField: string;
+  endText: string | null;
+  showParticipants: boolean;
+  showMaybes: boolean;
 };
 
 const STATUS_DISPLAY: Record<SessionStatus, StatusDisplay> = {
   active: {
     emoji: "🟢",
     label: "Active",
+    title: "Session",
+    footer: "Session de jeu",
+    color: DISCORD_THEME.colors.primary,
+    whenField: "🕒 Quand",
+    hostField: "👑 Hôte",
+    endText: null,
+    showParticipants: true,
+    showMaybes: true,
   },
 
   cancelled: {
     emoji: "🚫",
     label: "Annulée",
+    title: "Session annulée",
+    footer: "Session annulée",
+    color: DISCORD_THEME.colors.danger,
+    whenField: "🕒 Prévue",
+    hostField: "🚫 Annulée par",
+    endText: "🚫 **Cette session a été annulée.**",
+    showParticipants: false,
+    showMaybes: false,
   },
 
   completed: {
     emoji: "✅",
     label: "Terminée",
+    title: "Session terminée",
+    footer: "Session terminée",
+    color: DISCORD_THEME.colors.success,
+    whenField: "🕒 Prévue",
+    hostField: "👑 Hôte",
+    endText: "✅ **Cette session est terminée.**",
+    showParticipants: true,
+    showMaybes: false,
   },
 
   deleted: {
     emoji: "🗑️",
     label: "Supprimée",
+    title: "Session supprimée",
+    footer: "Session supprimée",
+    color: DISCORD_THEME.colors.muted,
+    whenField: "🕒 Prévue",
+    hostField: "👑 Hôte",
+    endText: "🗑️ **Cette session a été supprimée.**",
+    showParticipants: false,
+    showMaybes: false,
   },
 };
 
@@ -62,12 +100,6 @@ function formatUsers(userIds: ReadonlySet<string>): string {
   return [...userIds].map((userId) => `<@${userId}>`).join("\n");
 }
 
-/**
- * Affichage natif Discord du moment de la session.
- *
- * Discord adapte automatiquement l'heure au fuseau
- * de l'utilisateur qui regarde le message.
- */
 function formatSessionWhen(
   scheduledAt: number | null,
   fallbackWhen: string,
@@ -76,10 +108,13 @@ function formatSessionWhen(
     return fallbackWhen;
   }
 
-  return [`<t:${scheduledAt}:F>`, `<t:${scheduledAt}:R>`].join("\n");
+  return [
+    discordTimeUnix(scheduledAt, "F"),
+    discordTimeUnix(scheduledAt, "R"),
+  ].join("\n");
 }
 
-function sqliteDateToDiscordTimestamp(value: string | null): number | null {
+function sqliteDateToMilliseconds(value: string | null): number | null {
   if (!value) {
     return null;
   }
@@ -90,132 +125,61 @@ function sqliteDateToDiscordTimestamp(value: string | null): number | null {
     return null;
   }
 
-  return Math.floor(date.getTime() / 1000);
+  return date.getTime();
 }
 
-export function buildSessionEmbed({
-  game,
-  when,
-  scheduledAt,
-  description,
-  hostId,
-  participants,
-  maybes,
-}: SessionEmbedData): EmbedBuilder {
-  const embed = new EmbedBuilder()
-    .setColor(0x5865f2)
-    .setTitle(`${game.emoji ?? "🎮"} Session • ${game.name}`)
-    .addFields(
-      {
-        name: "🕒 Quand",
-        value: formatSessionWhen(scheduledAt, when),
-        inline: true,
-      },
-      {
-        name: "👑 Hôte",
-        value: `<@${hostId}>`,
-        inline: true,
-      },
-      {
-        name: `✅ Participants (${participants.size})`,
-        value: formatUsers(participants),
-        inline: false,
-      },
-      {
-        name: `🤔 Peut-être (${maybes.size})`,
-        value: formatUsers(maybes),
-        inline: false,
-      },
-    )
-    .setFooter({
-      text: "YOLO • Session de jeu",
-    })
-    .setTimestamp();
+/**
+ * Construit l'embed d'une session quel que soit son statut.
+ */
+export function buildSessionEmbed(session: SessionEmbedData) {
+  const display = STATUS_DISPLAY[session.status];
+  const gameEmoji = session.game.emoji || "🎮";
 
-  if (description) {
-    embed.setDescription(description);
+  const embed = createEmbed({
+    title: `${gameEmoji} ${display.title} • ${session.game.name}`,
+    color: display.color,
+    footer: display.footer,
+  }).addFields(
+    {
+      name: display.whenField,
+      value: formatSessionWhen(session.scheduledAt, session.when),
+      inline: true,
+    },
+    {
+      name: display.hostField,
+      value: `<@${session.hostId}>`,
+      inline: true,
+    },
+  );
+
+  if (display.showParticipants) {
+    embed.addFields({
+      name: `✅ Participants (${session.participants.size})`,
+      value: formatUsers(session.participants),
+      inline: false,
+    });
   }
 
-  return embed;
-}
-
-export function buildCancelledSessionEmbed({
-  game,
-  when,
-  scheduledAt,
-  description,
-  hostId,
-}: CancelledSessionEmbedData): EmbedBuilder {
-  const embed = new EmbedBuilder()
-    .setColor(0xed4245)
-    .setTitle(`${game.emoji ?? "🎮"} Session annulée • ${game.name}`)
-    .addFields(
-      {
-        name: "🕒 Prévue",
-        value: formatSessionWhen(scheduledAt, when),
-        inline: true,
-      },
-      {
-        name: "🚫 Annulée par",
-        value: `<@${hostId}>`,
-        inline: true,
-      },
-    )
-    .setFooter({
-      text: "YOLO • Session annulée",
-    })
-    .setTimestamp();
-
-  if (description) {
-    embed.setDescription(
-      `${description}\n\n🚫 **Cette session a été annulée.**`,
-    );
-  } else {
-    embed.setDescription("🚫 **Cette session a été annulée.**");
+  if (display.showMaybes) {
+    embed.addFields({
+      name: `🤔 Peut-être (${session.maybes.size})`,
+      value: formatUsers(session.maybes),
+      inline: false,
+    });
   }
 
-  return embed;
-}
+  const descriptionParts: string[] = [];
 
-export function buildCompletedSessionEmbed({
-  game,
-  when,
-  scheduledAt,
-  description,
-  hostId,
-  participants,
-}: CompletedSessionEmbedData): EmbedBuilder {
-  const embed = new EmbedBuilder()
-    .setColor(0x57f287)
-    .setTitle(`${game.emoji ?? "🎮"} Session terminée • ${game.name}`)
-    .addFields(
-      {
-        name: "🕒 Prévue",
-        value: formatSessionWhen(scheduledAt, when),
-        inline: true,
-      },
-      {
-        name: "👑 Hôte",
-        value: `<@${hostId}>`,
-        inline: true,
-      },
-      {
-        name: `✅ Participants (${participants.size})`,
-        value: formatUsers(participants),
-        inline: false,
-      },
-    )
-    .setFooter({
-      text: "YOLO • Session terminée",
-    })
-    .setTimestamp();
+  if (session.description) {
+    descriptionParts.push(session.description);
+  }
 
-  if (description) {
-    embed.setDescription(
-      `${description}\n\n✅ **Cette session est terminée.**`,
-    );
-  } else {
-    embed.setDescription("✅ **Cette session est terminée.**");
+  if (display.endText) {
+    descriptionParts.push(display.endText);
+  }
+
+  if (descriptionParts.length > 0) {
+    embed.setDescription(descriptionParts.join("\n\n"));
   }
 
   return embed;
@@ -223,14 +187,12 @@ export function buildCompletedSessionEmbed({
 
 export function buildSessionHistoryEmbed(
   sessions: SessionHistoryEntry[],
-): EmbedBuilder {
-  const embed = new EmbedBuilder()
-    .setColor(0x5865f2)
-    .setTitle("📚 Historique des sessions")
-    .setFooter({
-      text: "YOLO • Historique",
-    })
-    .setTimestamp();
+) {
+  const embed = createEmbed({
+    title: "📚 Historique des sessions",
+    color: DISCORD_THEME.colors.primary,
+    footer: "Historique",
+  });
 
   if (sessions.length === 0) {
     embed.setDescription("Aucune session n'a encore été créée.");
@@ -240,25 +202,23 @@ export function buildSessionHistoryEmbed(
 
   const lines = sessions.map((session) => {
     const status = STATUS_DISPLAY[session.status];
+    const createdMilliseconds = sqliteDateToMilliseconds(session.createdAt);
 
-    const createdTimestamp = sqliteDateToDiscordTimestamp(session.createdAt);
-
-    const createdText = createdTimestamp
-      ? `<t:${createdTimestamp}:R>`
-      : "date inconnue";
-
-    const game = `${session.game.emoji ?? "🎮"} ${session.game.name}`;
+    const createdText =
+      createdMilliseconds !== null
+        ? discordTime(createdMilliseconds, "R")
+        : "date inconnue";
 
     const participantWord =
       session.joinedCount > 1 ? "participants" : "participant";
 
     const plannedText =
       session.scheduledAt !== null
-        ? `<t:${session.scheduledAt}:F>`
+        ? discordTimeUnix(session.scheduledAt, "F")
         : session.when;
 
     return [
-      `${status.emoji} **${game}**`,
+      `${status.emoji} **${gameLabel(session.game)}**`,
       `└ ${status.label} • ${session.joinedCount} ${participantWord}`,
       `└ 🕒 ${plannedText}`,
       `└ 👑 <@${session.hostId}> • créée ${createdText}`,

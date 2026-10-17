@@ -3,6 +3,12 @@ import type { GameSession } from "../../types/session.js";
 
 export type SessionRejection = (message: string) => Promise<void>;
 
+/**
+ * Garde d'interface utilisée avant d'afficher une action.
+ *
+ * Les mutations elles-mêmes revérifient leurs règles métier
+ * dans `session.service.ts`.
+ */
 export async function requireActiveSession(
   messageId: string,
   reject: SessionRejection,
@@ -17,6 +23,12 @@ export async function requireActiveSession(
   return session;
 }
 
+/**
+ * Garde d'interface pour les panneaux et formulaires réservés à l'hôte.
+ *
+ * Cette vérification améliore l'UX mais ne remplace pas
+ * l'autorisation effectuée par le service lors d'une mutation.
+ */
 export async function requireHostSession(
   userId: string,
   messageId: string,

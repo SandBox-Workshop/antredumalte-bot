@@ -22,9 +22,10 @@ import {
 
 import { buildSessionButtons } from "../../features/sessions/sessions.buttons.js";
 
+import { gameLabel } from "../../utils/discord-presentation.js";
 import {
   formatSessionLegacyWhen,
-  parseSessionDateTime,
+  resolveSessionSchedule,
 } from "../../utils/session-date.js";
 
 export const data = new SlashCommandBuilder()
@@ -101,7 +102,7 @@ export async function autocomplete(
 
   await interaction.respond(
     games.map((game) => ({
-      name: `${game.emoji || "🎮"} ${game.name}`,
+      name: gameLabel(game),
       value: game.id,
     })),
   );
@@ -120,11 +121,8 @@ async function createGameSession(
   }
 
   const gameId = interaction.options.getString("jeu", true);
-
   const date = interaction.options.getString("date", true);
-
   const time = interaction.options.getString("heure", true);
-
   const description = interaction.options.getString("description");
 
   const game = getGameById(gameId);
@@ -138,33 +136,21 @@ async function createGameSession(
     return;
   }
 
-  const scheduledAt = parseSessionDateTime(date, time);
+  const schedule = resolveSessionSchedule(date, time);
 
-  if (scheduledAt === null) {
+  if (!schedule.ok) {
     await interaction.reply({
-      content:
-        "❌ Date ou heure invalide. Utilise `JJ/MM/AAAA` pour la date et `HH:MM` pour l'heure.",
+      content: schedule.message,
       flags: MessageFlags.Ephemeral,
     });
 
     return;
   }
 
-  const now = Math.floor(Date.now() / 1000);
-
-  if (scheduledAt <= now) {
-    await interaction.reply({
-      content: "❌ La session doit être prévue dans le futur.",
-      flags: MessageFlags.Ephemeral,
-    });
-
-    return;
-  }
-
+  const { scheduledAt } = schedule;
   const when = formatSessionLegacyWhen(scheduledAt);
 
   const participants = new Set<string>([interaction.user.id]);
-
   const maybes = new Set<string>();
 
   const embed = buildSessionEmbed({
@@ -174,6 +160,8 @@ async function createGameSession(
     description,
 
     hostId: interaction.user.id,
+
+    status: "active",
 
     participants,
     maybes,
@@ -189,7 +177,6 @@ async function createGameSession(
   try {
     createSession(message.id, {
       guildId: interaction.guildId,
-
       channelId: interaction.channelId,
 
       game,
@@ -213,10 +200,6 @@ async function createGameSession(
         deleteError,
       );
 
-      /*
-       * Si Discord refuse la suppression, on neutralise au minimum
-       * le message afin de ne pas laisser de boutons sans session en base.
-       */
       try {
         await message.edit({
           content:
@@ -272,12 +255,10 @@ export async function execute(
   switch (subcommand) {
     case "create":
       await createGameSession(interaction);
-
       return;
 
     case "history":
       await showSessionHistory(interaction);
-
       return;
 
     default:
