@@ -75,10 +75,6 @@ function resolveGame(gameId: string): SessionGame {
     };
   }
 
-  /*
-   * Une session historique reste lisible même si l'entrée correspondante
-   * a été retirée de games.json.
-   */
   return {
     id: gameId,
     name: gameId,
@@ -361,7 +357,6 @@ export function setMemberStatus(
   }
 
   updateMemberStatus(session.id, userId, status);
-
   touchSession(session.id);
 
   return mutationSuccess(getUpdatedActiveSession(messageId));
@@ -500,6 +495,66 @@ export function closeSession(
   return mutationSuccess(getUpdatedSession(messageId));
 }
 
+/**
+ * Retourne les sessions actives qui ont dépassé
+ * la durée maximale autorisée après leur heure de début.
+ */
+export function getSessionsDueForAutoClose(
+  scheduledBeforeUnix: number,
+): GameSession[] {
+  const statement = db.prepare(`
+    SELECT *
+    FROM sessions
+    WHERE status = 'active'
+      AND scheduled_at <= ?
+    ORDER BY scheduled_at ASC
+    LIMIT 50
+  `);
+
+  const rows = statement.all(scheduledBeforeUnix) as SessionRow[];
+
+  return rows
+    .map((row) => hydrateSession(row))
+    .filter((session): session is GameSession => session !== null);
+}
+
+/**
+ * Termine automatiquement une session expirée.
+ *
+ * La condition sur `scheduled_at` est répétée dans l'UPDATE
+ * afin d'éviter de fermer une session qui aurait été replanifiée
+ * entre la lecture du scheduler et cette mise à jour.
+ */
+export function autoCompleteSession(
+  messageId: string,
+  scheduledBeforeUnix: number,
+  closedAt = Math.floor(Date.now() / 1000),
+): GameSession | null {
+  const statement = db.prepare(`
+    UPDATE sessions
+    SET
+      status = 'completed',
+      closed_at = ?,
+      updated_at = ?
+    WHERE message_id = ?
+      AND status = 'active'
+      AND scheduled_at <= ?
+  `);
+
+  const result = statement.run(
+    closedAt,
+    closedAt,
+    messageId,
+    scheduledBeforeUnix,
+  );
+
+  if (Number(result.changes) === 0) {
+    return null;
+  }
+
+  return getUpdatedSession(messageId);
+}
+
 export function getSessionHistory(
   guildId: string,
   limit = 10,
@@ -566,10 +621,6 @@ export function getSessionHistory(
   });
 }
 
-/**
- * Retourne les sessions actives dont l'heure de début est atteinte
- * et dont la notification n'a pas encore été traitée.
- */
 export function getSessionsDueForStart(
   nowUnix = Math.floor(Date.now() / 1000),
 ): GameSession[] {
@@ -591,12 +642,6 @@ export function getSessionsDueForStart(
     .filter((session): session is GameSession => session !== null);
 }
 
-/**
- * Réserve atomiquement l'envoi de la notification de début.
- *
- * Le marquage a lieu avant l'appel Discord afin d'éviter les doubles
- * pings si deux ticks du scheduler se chevauchent.
- */
 export function claimSessionStartNotification(
   messageId: string,
   notifiedAt = Math.floor(Date.now() / 1000),
@@ -616,10 +661,6 @@ export function claimSessionStartNotification(
   return Number(result.changes) > 0;
 }
 
-/**
- * Rend la notification de nouveau disponible
- * lorsqu'un envoi Discord échoue.
- */
 export function releaseSessionStartNotification(messageId: string): void {
   const statement = db.prepare(`
     UPDATE sessions
@@ -633,10 +674,6 @@ export function releaseSessionStartNotification(messageId: string): void {
   statement.run(messageId);
 }
 
-/**
- * Retourne les sessions fermées dont le rôle Discord temporaire
- * doit encore être supprimé.
- */
 export function getSessionsPendingRoleCleanup(): GameSession[] {
   const statement = db.prepare(`
     SELECT *
@@ -654,9 +691,6 @@ export function getSessionsPendingRoleCleanup(): GameSession[] {
     .filter((session): session is GameSession => session !== null);
 }
 
-/**
- * Oublie le rôle temporaire après sa suppression côté Discord.
- */
 export function clearSessionRoleId(messageId: string): void {
   const statement = db.prepare(`
     UPDATE sessions
