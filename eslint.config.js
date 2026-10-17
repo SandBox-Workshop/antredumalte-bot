@@ -1,53 +1,93 @@
-import { configs } from "@eslint/js";
+import js from "@eslint/js";
+import { defineConfig } from "eslint/config";
+import globals from "globals";
+import tseslint from "typescript-eslint";
 
-export default [
-  configs.recommended,
+/**
+ * Configuration ESLint du projet.
+ *
+ * Le projet est actuellement en migration progressive de JavaScript
+ * vers TypeScript. Les deux langages sont donc vérifiés séparément :
+ *
+ * - les fichiers JavaScript conservent les règles ESLint classiques ;
+ * - les fichiers TypeScript utilisent également les règles recommandées
+ *   par typescript-eslint.
+ *
+ * Cette séparation permet de migrer les fichiers progressivement sans
+ * imposer immédiatement les règles TypeScript à l'ensemble du code existant.
+ */
+export default defineConfig(
+  /**
+   * Fichiers générés ou dépendances qui ne doivent jamais être analysés.
+   */
   {
+    ignores: [
+      "node_modules/**",
+      "data/*.sqlite",
+      "data/*.sqlite-shm",
+      "data/*.sqlite-wal",
+    ],
+  },
+
+  /**
+   * Configuration des fichiers JavaScript existants.
+   */
+  {
+    files: ["**/*.js"],
+
+    extends: [js.configs.recommended],
+
     languageOptions: {
       ecmaVersion: "latest",
+      sourceType: "module",
+
+      globals: {
+        ...globals.node,
+      },
     },
+
     rules: {
-      "arrow-spacing": ["warn", { before: true, after: true }],
-      "brace-style": ["error", "stroustrup", { allowSingleLine: true }],
-      "comma-dangle": ["error", "always-multiline"],
-      "comma-spacing": "error",
-      "comma-style": "error",
-      curly: ["error", "multi-line", "consistent"],
-      "dot-location": ["error", "property"],
-      "handle-callback-err": "off",
-      indent: ["error", "tab"],
-      "keyword-spacing": "error",
-      "max-nested-callbacks": ["error", { max: 4 }],
-      "max-statements-per-line": ["error", { max: 2 }],
-      "no-console": "off",
-      "no-empty-function": "error",
-      "no-floating-decimal": "error",
-      "no-inline-comments": "error",
-      "no-lonely-if": "error",
-      "no-multi-spaces": "error",
-      "no-multiple-empty-lines": ["error", { max: 2, maxEOF: 1, maxBOF: 0 }],
-      "no-shadow": ["error", { allow: ["err", "resolve", "reject"] }],
-      "no-trailing-spaces": ["error"],
-      "no-var": "error",
-      "no-undef": "off",
-      "object-curly-spacing": ["error", "always"],
-      "prefer-const": "error",
-      quotes: ["error", "single"],
-      semi: ["error", "always"],
-      "space-before-blocks": "error",
-      "space-before-function-paren": [
-        "error",
+      "no-unused-vars": [
+        "warn",
         {
-          anonymous: "never",
-          named: "never",
-          asyncArrow: "always",
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
         },
       ],
-      "space-in-parens": "error",
-      "space-infix-ops": "error",
-      "space-unary-ops": "error",
-      "spaced-comment": "error",
-      yoda: "error",
     },
   },
-];
+
+  /**
+   * Configuration des fichiers TypeScript.
+   *
+   * La règle native `no-unused-vars` est désactivée au profit de sa
+   * version TypeScript, capable de comprendre correctement les types,
+   * imports de types et autres constructions propres à TypeScript.
+   */
+  {
+    files: ["**/*.ts"],
+
+    extends: [js.configs.recommended, tseslint.configs.recommended],
+
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "module",
+
+      globals: {
+        ...globals.node,
+      },
+    },
+
+    rules: {
+      "no-unused-vars": "off",
+
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+        },
+      ],
+    },
+  },
+);
