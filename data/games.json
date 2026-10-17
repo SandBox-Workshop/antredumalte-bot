@@ -9,7 +9,7 @@
     "id": "minecraft",
     "name": "Minecraft",
     "emoji": "⛏️",
-    "enabled": false
+    "enabled": true
   },
   {
     "id": "project-zomboid",
