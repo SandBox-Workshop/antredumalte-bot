@@ -3,8 +3,11 @@ import { db } from "./database.service.js";
 import type {
   CreateSessionInput,
   GameSession,
+  SessionCloseStatus,
   SessionHistoryEntry,
   SessionMemberStatus,
+  SessionMutationFailureReason,
+  SessionMutationResult,
   SessionStatus,
   UpdateSessionDetailsInput,
   UpdateSessionGameInput,
@@ -22,7 +25,6 @@ type SessionRow = {
   game_emoji: string | null;
 
   when_text: string;
-
   scheduled_at: number | bigint | null;
 
   description: string | null;
@@ -47,9 +49,10 @@ type SessionMemberRow = {
 
 type SessionHistoryRow = SessionRow & {
   joined_count: number | bigint;
-
   maybe_count: number | bigint;
 };
+
+type SessionBase = Omit<GameSession, "participants" | "maybes">;
 
 function sqliteIntegerToNumber(value: number | bigint | null): number | null {
   if (value === null) {
@@ -59,14 +62,63 @@ function sqliteIntegerToNumber(value: number | bigint | null): number | null {
   return Number(value);
 }
 
-function getSessionRow(messageId: string): SessionRow | null {
-  const statement = db.prepare(`
-    SELECT *
-    FROM sessions
-    WHERE message_id = ?
-      AND status = 'active'
-    LIMIT 1
-  `);
+function mapGame(row: SessionRow): GameSession["game"] {
+  return {
+    id: row.game_id,
+    name: row.game_name,
+    emoji: row.game_emoji,
+  };
+}
+
+function mapSessionRow(row: SessionRow): SessionBase {
+  return {
+    id: row.id,
+
+    messageId: row.message_id,
+    guildId: row.guild_id,
+    channelId: row.channel_id,
+
+    game: mapGame(row),
+
+    when: row.when_text,
+    scheduledAt: sqliteIntegerToNumber(row.scheduled_at),
+
+    description: row.description,
+
+    creatorId: row.creator_id,
+    hostId: row.host_id,
+
+    status: row.status,
+
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+
+    cancelledAt: row.cancelled_at,
+    completedAt: row.completed_at,
+    deletedAt: row.deleted_at,
+  };
+}
+
+function getSessionRow(
+  messageId: string,
+  activeOnly = true,
+): SessionRow | null {
+  const statement = db.prepare(
+    activeOnly
+      ? `
+          SELECT *
+          FROM sessions
+          WHERE message_id = ?
+            AND status = 'active'
+          LIMIT 1
+        `
+      : `
+          SELECT *
+          FROM sessions
+          WHERE message_id = ?
+          LIMIT 1
+        `,
+  );
 
   const row = statement.get(messageId) as SessionRow | undefined;
 
@@ -103,44 +155,9 @@ function hydrateSession(row: SessionRow | null): GameSession | null {
   );
 
   return {
-    id: row.id,
-
-    messageId: row.message_id,
-
-    guildId: row.guild_id,
-
-    channelId: row.channel_id,
-
-    game: {
-      id: row.game_id,
-      name: row.game_name,
-      emoji: row.game_emoji,
-    },
-
-    when: row.when_text,
-
-    scheduledAt: sqliteIntegerToNumber(row.scheduled_at),
-
-    description: row.description,
-
-    creatorId: row.creator_id,
-
-    hostId: row.host_id,
-
-    status: row.status,
-
+    ...mapSessionRow(row),
     participants,
     maybes,
-
-    createdAt: row.created_at,
-
-    updatedAt: row.updated_at,
-
-    cancelledAt: row.cancelled_at,
-
-    completedAt: row.completed_at,
-
-    deletedAt: row.deleted_at,
   };
 }
 
@@ -176,6 +193,55 @@ function touchSession(sessionId: number): void {
   statement.run(sessionId);
 }
 
+function mutationFailure(
+  reason: SessionMutationFailureReason,
+): SessionMutationResult {
+  return {
+    ok: false,
+    reason,
+  };
+}
+
+function mutationSuccess(session: GameSession): SessionMutationResult {
+  return {
+    ok: true,
+    session,
+  };
+}
+
+function getUpdatedActiveSession(messageId: string): GameSession {
+  const session = getSession(messageId);
+
+  if (!session) {
+    throw new Error(
+      `Session active introuvable après mise à jour : ${messageId}.`,
+    );
+  }
+
+  return session;
+}
+
+function getUpdatedSession(messageId: string): GameSession {
+  const session = hydrateSession(getSessionRow(messageId, false));
+
+  if (!session) {
+    throw new Error(`Session introuvable après mise à jour : ${messageId}.`);
+  }
+
+  return session;
+}
+
+function requireHost(
+  session: GameSession,
+  userId: string,
+): SessionMutationResult | null {
+  if (session.hostId !== userId) {
+    return mutationFailure("not_host");
+  }
+
+  return null;
+}
+
 export function createSession(
   messageId: string,
   session: CreateSessionInput,
@@ -184,32 +250,32 @@ export function createSession(
 
   try {
     const insertSession = db.prepare(`
-        INSERT INTO sessions (
-          message_id,
-          guild_id,
-          channel_id,
+      INSERT INTO sessions (
+        message_id,
+        guild_id,
+        channel_id,
 
-          game_id,
-          game_name,
-          game_emoji,
+        game_id,
+        game_name,
+        game_emoji,
 
-          when_text,
-          scheduled_at,
-          description,
+        when_text,
+        scheduled_at,
+        description,
 
-          creator_id,
-          host_id,
+        creator_id,
+        host_id,
 
-          status
-        )
-        VALUES (
-          ?, ?, ?,
-          ?, ?, ?,
-          ?, ?, ?,
-          ?, ?,
-          'active'
-        )
-      `);
+        status
+      )
+      VALUES (
+        ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?,
+        ?, ?,
+        'active'
+      )
+    `);
 
     const result = insertSession.run(
       messageId,
@@ -231,13 +297,13 @@ export function createSession(
     const sessionId = Number(result.lastInsertRowid);
 
     const insertHost = db.prepare(`
-        INSERT INTO session_members (
-          session_id,
-          user_id,
-          status
-        )
-        VALUES (?, ?, 'joined')
-      `);
+      INSERT INTO session_members (
+        session_id,
+        user_id,
+        status
+      )
+      VALUES (?, ?, 'joined')
+    `);
 
     insertHost.run(sessionId, session.creatorId);
 
@@ -255,178 +321,184 @@ export function getSession(messageId: string): GameSession | null {
   return hydrateSession(getSessionRow(messageId));
 }
 
-export function joinSession(
+/**
+ * Modifie l'état de participation d'un membre.
+ *
+ * La règle interdisant à l'hôte de quitter ou passer en "peut-être"
+ * vit ici afin qu'elle s'applique à tous les futurs appelants du service.
+ */
+export function setMemberStatus(
   messageId: string,
   userId: string,
-): GameSession | null {
+  status: SessionMemberStatus,
+): SessionMutationResult {
   const session = getSession(messageId);
 
   if (!session) {
-    return null;
+    return mutationFailure("session_not_found");
   }
 
-  updateMemberStatus(session.id, userId, "joined");
+  if (session.hostId === userId) {
+    if (status === "left") {
+      return mutationFailure("host_cannot_leave");
+    }
 
-  touchSession(session.id);
-
-  return getSession(messageId);
-}
-
-export function maybeSession(
-  messageId: string,
-  userId: string,
-): GameSession | null {
-  const session = getSession(messageId);
-
-  if (!session) {
-    return null;
+    if (status === "maybe") {
+      return mutationFailure("host_cannot_maybe");
+    }
   }
 
-  updateMemberStatus(session.id, userId, "maybe");
-
+  updateMemberStatus(session.id, userId, status);
   touchSession(session.id);
 
-  return getSession(messageId);
-}
-
-export function leaveSession(
-  messageId: string,
-  userId: string,
-): GameSession | null {
-  const session = getSession(messageId);
-
-  if (!session) {
-    return null;
-  }
-
-  updateMemberStatus(session.id, userId, "left");
-
-  touchSession(session.id);
-
-  return getSession(messageId);
+  return mutationSuccess(getUpdatedActiveSession(messageId));
 }
 
 export function transferSessionHost(
   messageId: string,
+  actingUserId: string,
   newHostId: string,
-): GameSession | null {
+): SessionMutationResult {
   const session = getSession(messageId);
 
   if (!session) {
-    return null;
+    return mutationFailure("session_not_found");
+  }
+
+  const hostFailure = requireHost(session, actingUserId);
+
+  if (hostFailure) {
+    return hostFailure;
+  }
+
+  if (newHostId === session.hostId) {
+    return mutationFailure("new_host_is_current_host");
+  }
+
+  if (!session.participants.has(newHostId)) {
+    return mutationFailure("new_host_must_be_participant");
   }
 
   updateMemberStatus(session.id, newHostId, "joined");
 
   const statement = db.prepare(`
-      UPDATE sessions
-      SET
-        host_id = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `);
+    UPDATE sessions
+    SET
+      host_id = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `);
 
   statement.run(newHostId, session.id);
 
-  return getSession(messageId);
+  return mutationSuccess(getUpdatedActiveSession(messageId));
 }
 
 export function updateSessionDetails(
   messageId: string,
+  actingUserId: string,
   { when, scheduledAt, description }: UpdateSessionDetailsInput,
-): GameSession | null {
+): SessionMutationResult {
   const session = getSession(messageId);
 
   if (!session) {
-    return null;
+    return mutationFailure("session_not_found");
+  }
+
+  const hostFailure = requireHost(session, actingUserId);
+
+  if (hostFailure) {
+    return hostFailure;
   }
 
   const statement = db.prepare(`
-      UPDATE sessions
-      SET
-        when_text = ?,
-        scheduled_at = ?,
-        description = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `);
+    UPDATE sessions
+    SET
+      when_text = ?,
+      scheduled_at = ?,
+      description = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `);
 
   statement.run(when, scheduledAt, description || null, session.id);
 
-  return getSession(messageId);
+  return mutationSuccess(getUpdatedActiveSession(messageId));
 }
 
 export function updateSessionGame(
   messageId: string,
+  actingUserId: string,
   game: UpdateSessionGameInput,
-): GameSession | null {
+): SessionMutationResult {
   const session = getSession(messageId);
 
   if (!session) {
-    return null;
+    return mutationFailure("session_not_found");
+  }
+
+  const hostFailure = requireHost(session, actingUserId);
+
+  if (hostFailure) {
+    return hostFailure;
   }
 
   const statement = db.prepare(`
-      UPDATE sessions
-      SET
-        game_id = ?,
-        game_name = ?,
-        game_emoji = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `);
+    UPDATE sessions
+    SET
+      game_id = ?,
+      game_name = ?,
+      game_emoji = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `);
 
   statement.run(game.id, game.name, game.emoji ?? null, session.id);
 
-  return getSession(messageId);
+  return mutationSuccess(getUpdatedActiveSession(messageId));
 }
 
-export function cancelSession(messageId: string): GameSession | null {
+/**
+ * Clôt une session active.
+ *
+ * Seul l'hôte courant peut effectuer cette mutation.
+ */
+export function closeSession(
+  messageId: string,
+  actingUserId: string,
+  status: SessionCloseStatus,
+): SessionMutationResult {
   const session = getSession(messageId);
 
   if (!session) {
-    return null;
+    return mutationFailure("session_not_found");
+  }
+
+  const hostFailure = requireHost(session, actingUserId);
+
+  if (hostFailure) {
+    return hostFailure;
   }
 
   const statement = db.prepare(`
-      UPDATE sessions
-      SET
-        status = 'cancelled',
-        cancelled_at = CURRENT_TIMESTAMP,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `);
+    UPDATE sessions
+    SET
+      status = ?,
+      cancelled_at = CASE
+        WHEN ? = 'cancelled' THEN CURRENT_TIMESTAMP
+        ELSE cancelled_at
+      END,
+      completed_at = CASE
+        WHEN ? = 'completed' THEN CURRENT_TIMESTAMP
+        ELSE completed_at
+      END,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `);
 
-  statement.run(session.id);
+  statement.run(status, status, status, session.id);
 
-  return {
-    ...session,
-    status: "cancelled",
-  };
-}
-
-export function completeSession(messageId: string): GameSession | null {
-  const session = getSession(messageId);
-
-  if (!session) {
-    return null;
-  }
-
-  const statement = db.prepare(`
-      UPDATE sessions
-      SET
-        status = 'completed',
-        completed_at = CURRENT_TIMESTAMP,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `);
-
-  statement.run(session.id);
-
-  return {
-    ...session,
-    status: "completed",
-  };
+  return mutationSuccess(getUpdatedSession(messageId));
 }
 
 export function getSessionHistory(
@@ -436,67 +508,61 @@ export function getSessionHistory(
   const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 20));
 
   const statement = db.prepare(`
-      SELECT
-        s.*,
+    SELECT
+      s.*,
 
-        (
-          SELECT COUNT(*)
-          FROM session_members AS sm
-          WHERE sm.session_id = s.id
-            AND sm.status = 'joined'
-        ) AS joined_count,
+      (
+        SELECT COUNT(*)
+        FROM session_members AS sm
+        WHERE sm.session_id = s.id
+          AND sm.status = 'joined'
+      ) AS joined_count,
 
-        (
-          SELECT COUNT(*)
-          FROM session_members AS sm
-          WHERE sm.session_id = s.id
-            AND sm.status = 'maybe'
-        ) AS maybe_count
+      (
+        SELECT COUNT(*)
+        FROM session_members AS sm
+        WHERE sm.session_id = s.id
+          AND sm.status = 'maybe'
+      ) AS maybe_count
 
-      FROM sessions AS s
+    FROM sessions AS s
 
-      WHERE s.guild_id = ?
+    WHERE s.guild_id = ?
 
-      ORDER BY s.id DESC
+    ORDER BY s.id DESC
 
-      LIMIT ?
-    `);
+    LIMIT ?
+  `);
 
   const rows = statement.all(guildId, safeLimit) as SessionHistoryRow[];
 
-  return rows.map((row) => ({
-    id: row.id,
+  return rows.map((row) => {
+    const session = mapSessionRow(row);
 
-    game: {
-      id: row.game_id,
-      name: row.game_name,
-      emoji: row.game_emoji,
-    },
+    return {
+      id: session.id,
 
-    when: row.when_text,
+      game: session.game,
 
-    scheduledAt: sqliteIntegerToNumber(row.scheduled_at),
+      when: session.when,
+      scheduledAt: session.scheduledAt,
 
-    description: row.description,
+      description: session.description,
 
-    creatorId: row.creator_id,
+      creatorId: session.creatorId,
+      hostId: session.hostId,
 
-    hostId: row.host_id,
+      status: session.status,
 
-    status: row.status,
+      joinedCount: Number(row.joined_count),
+      maybeCount: Number(row.maybe_count),
 
-    joinedCount: Number(row.joined_count),
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
 
-    maybeCount: Number(row.maybe_count),
-
-    createdAt: row.created_at,
-
-    updatedAt: row.updated_at,
-
-    cancelledAt: row.cancelled_at,
-
-    completedAt: row.completed_at,
-
-    deletedAt: row.deleted_at,
-  }));
+      cancelledAt: session.cancelledAt,
+      completedAt: session.completedAt,
+      deletedAt: session.deletedAt,
+    };
+  });
 }
