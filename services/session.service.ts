@@ -1,45 +1,44 @@
+import { getGameById } from "./game.service.js";
 import { db } from "./database.service.js";
 
 import type {
   CreateSessionInput,
   GameSession,
   SessionCloseStatus,
+  SessionGame,
   SessionHistoryEntry,
   SessionMemberStatus,
   SessionMutationFailureReason,
   SessionMutationResult,
   SessionStatus,
   UpdateSessionDetailsInput,
-  UpdateSessionGameInput,
 } from "../types/session.js";
 
 type SessionRow = {
-  id: number;
+  id: number | bigint;
 
   message_id: string;
   guild_id: string;
   channel_id: string;
 
   game_id: string;
-  game_name: string;
-  game_emoji: string | null;
 
-  when_text: string;
-  scheduled_at: number | bigint | null;
+  scheduled_at: number | bigint;
 
   description: string | null;
 
   creator_id: string;
   host_id: string;
 
+  role_id: string | null;
+
   status: SessionStatus;
 
-  created_at: string;
-  updated_at: string;
+  start_notified_at: number | bigint | null;
+  closed_at: number | bigint | null;
 
-  cancelled_at: string | null;
-  completed_at: string | null;
-  deleted_at: string | null;
+  created_at: number | bigint;
+  updated_at: number | bigint;
 };
 
 type SessionMemberRow = {
@@ -54,7 +53,11 @@ type SessionHistoryRow = SessionRow & {
 
 type SessionBase = Omit<GameSession, "participants" | "maybes">;
 
-function sqliteIntegerToNumber(value: number | bigint | null): number | null {
+function sqliteIntegerToNumber(value: number | bigint): number;
+function sqliteIntegerToNumber(value: number | bigint | null): number | null;
+function sqliteIntegerToNumber(
+  value: number | bigint | null,
+): number | null {
   if (value === null) {
     return null;
   }
@@ -62,25 +65,38 @@ function sqliteIntegerToNumber(value: number | bigint | null): number | null {
   return Number(value);
 }
 
-function mapGame(row: SessionRow): GameSession["game"] {
+function resolveGame(gameId: string): SessionGame {
+  const game = getGameById(gameId);
+
+  if (game) {
+    return {
+      id: game.id,
+      name: game.name,
+      emoji: game.emoji ?? null,
+    };
+  }
+
+  /*
+   * Une session historique reste lisible même si l'entrée correspondante
+   * a été retirée de games.json.
+   */
   return {
-    id: row.game_id,
-    name: row.game_name,
-    emoji: row.game_emoji,
+    id: gameId,
+    name: gameId,
+    emoji: null,
   };
 }
 
 function mapSessionRow(row: SessionRow): SessionBase {
   return {
-    id: row.id,
+    id: sqliteIntegerToNumber(row.id),
 
     messageId: row.message_id,
     guildId: row.guild_id,
     channelId: row.channel_id,
 
-    game: mapGame(row),
+    game: resolveGame(row.game_id),
 
-    when: row.when_text,
     scheduledAt: sqliteIntegerToNumber(row.scheduled_at),
 
     description: row.description,
@@ -88,14 +104,15 @@ function mapSessionRow(row: SessionRow): SessionBase {
     creatorId: row.creator_id,
     hostId: row.host_id,
 
+    roleId: row.role_id,
+
     status: row.status,
 
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    startNotifiedAt: sqliteIntegerToNumber(row.start_notified_at),
+    closedAt: sqliteIntegerToNumber(row.closed_at),
 
-    cancelledAt: row.cancelled_at,
-    completedAt: row.completed_at,
-    deletedAt: row.deleted_at,
+    createdAt: sqliteIntegerToNumber(row.created_at),
+    updatedAt: sqliteIntegerToNumber(row.updated_at),
   };
 }
 
@@ -140,7 +157,8 @@ function hydrateSession(row: SessionRow | null): GameSession | null {
     return null;
   }
 
-  const members = getSessionMembers(row.id);
+  const sessionId = sqliteIntegerToNumber(row.id);
+  const members = getSessionMembers(sessionId);
 
   const participants = new Set(
     members
@@ -177,7 +195,7 @@ function updateMemberStatus(
     ON CONFLICT(session_id, user_id)
     DO UPDATE SET
       status = excluded.status,
-      updated_at = CURRENT_TIMESTAMP
+      updated_at = unixepoch()
   `);
 
   statement.run(sessionId, userId, status);
@@ -186,7 +204,7 @@ function updateMemberStatus(
 function touchSession(sessionId: number): void {
   const statement = db.prepare(`
     UPDATE sessions
-    SET updated_at = CURRENT_TIMESTAMP
+    SET updated_at = unixepoch()
     WHERE id = ?
   `);
 
@@ -256,10 +274,7 @@ export function createSession(
         channel_id,
 
         game_id,
-        game_name,
-        game_emoji,
 
-        when_text,
         scheduled_at,
         description,
 
@@ -270,8 +285,8 @@ export function createSession(
       )
       VALUES (
         ?, ?, ?,
-        ?, ?, ?,
-        ?, ?, ?,
+        ?,
+        ?, ?,
         ?, ?,
         'active'
       )
@@ -282,11 +297,8 @@ export function createSession(
       session.guildId,
       session.channelId,
 
-      session.game.id,
-      session.game.name,
-      session.game.emoji ?? null,
+      session.gameId,
 
-      session.when,
       session.scheduledAt,
       session.description ?? null,
 
@@ -321,12 +333,6 @@ export function getSession(messageId: string): GameSession | null {
   return hydrateSession(getSessionRow(messageId));
 }
 
-/**
- * Modifie l'état de participation d'un membre.
- *
- * La règle interdisant à l'hôte de quitter ou passer en "peut-être"
- * vit ici afin qu'elle s'applique à tous les futurs appelants du service.
- */
 export function setMemberStatus(
   messageId: string,
   userId: string,
@@ -385,7 +391,7 @@ export function transferSessionHost(
     UPDATE sessions
     SET
       host_id = ?,
-      updated_at = CURRENT_TIMESTAMP
+      updated_at = unixepoch()
     WHERE id = ?
   `);
 
@@ -397,7 +403,7 @@ export function transferSessionHost(
 export function updateSessionDetails(
   messageId: string,
   actingUserId: string,
-  { when, scheduledAt, description }: UpdateSessionDetailsInput,
+  { scheduledAt, description }: UpdateSessionDetailsInput,
 ): SessionMutationResult {
   const session = getSession(messageId);
 
@@ -414,14 +420,13 @@ export function updateSessionDetails(
   const statement = db.prepare(`
     UPDATE sessions
     SET
-      when_text = ?,
       scheduled_at = ?,
       description = ?,
-      updated_at = CURRENT_TIMESTAMP
+      updated_at = unixepoch()
     WHERE id = ?
   `);
 
-  statement.run(when, scheduledAt, description || null, session.id);
+  statement.run(scheduledAt, description || null, session.id);
 
   return mutationSuccess(getUpdatedActiveSession(messageId));
 }
@@ -429,7 +434,7 @@ export function updateSessionDetails(
 export function updateSessionGame(
   messageId: string,
   actingUserId: string,
-  game: UpdateSessionGameInput,
+  gameId: string,
 ): SessionMutationResult {
   const session = getSession(messageId);
 
@@ -447,22 +452,15 @@ export function updateSessionGame(
     UPDATE sessions
     SET
       game_id = ?,
-      game_name = ?,
-      game_emoji = ?,
-      updated_at = CURRENT_TIMESTAMP
+      updated_at = unixepoch()
     WHERE id = ?
   `);
 
-  statement.run(game.id, game.name, game.emoji ?? null, session.id);
+  statement.run(gameId, session.id);
 
   return mutationSuccess(getUpdatedActiveSession(messageId));
 }
 
-/**
- * Clôt une session active.
- *
- * Seul l'hôte courant peut effectuer cette mutation.
- */
 export function closeSession(
   messageId: string,
   actingUserId: string,
@@ -484,19 +482,12 @@ export function closeSession(
     UPDATE sessions
     SET
       status = ?,
-      cancelled_at = CASE
-        WHEN ? = 'cancelled' THEN CURRENT_TIMESTAMP
-        ELSE cancelled_at
-      END,
-      completed_at = CASE
-        WHEN ? = 'completed' THEN CURRENT_TIMESTAMP
-        ELSE completed_at
-      END,
-      updated_at = CURRENT_TIMESTAMP
+      closed_at = unixepoch(),
+      updated_at = unixepoch()
     WHERE id = ?
   `);
 
-  statement.run(status, status, status, session.id);
+  statement.run(status, session.id);
 
   return mutationSuccess(getUpdatedSession(messageId));
 }
@@ -544,7 +535,6 @@ export function getSessionHistory(
 
       game: session.game,
 
-      when: session.when,
       scheduledAt: session.scheduledAt,
 
       description: session.description,
@@ -552,17 +542,18 @@ export function getSessionHistory(
       creatorId: session.creatorId,
       hostId: session.hostId,
 
+      roleId: session.roleId,
+
       status: session.status,
+
+      startNotifiedAt: session.startNotifiedAt,
+      closedAt: session.closedAt,
 
       joinedCount: Number(row.joined_count),
       maybeCount: Number(row.maybe_count),
 
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
-
-      cancelledAt: session.cancelledAt,
-      completedAt: session.completedAt,
-      deletedAt: session.deletedAt,
     };
   });
 }

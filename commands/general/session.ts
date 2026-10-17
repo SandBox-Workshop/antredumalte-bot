@@ -23,10 +23,7 @@ import {
 import { buildSessionButtons } from "../../features/sessions/sessions.buttons.js";
 
 import { gameLabel } from "../../utils/discord-presentation.js";
-import {
-  formatSessionLegacyWhen,
-  resolveSessionSchedule,
-} from "../../utils/session-date.js";
+import { resolveSessionSchedule } from "../../utils/session-date.js";
 
 export const data = new SlashCommandBuilder()
   .setName("session")
@@ -148,14 +145,12 @@ async function createGameSession(
   }
 
   const { scheduledAt } = schedule;
-  const when = formatSessionLegacyWhen(scheduledAt);
 
   const participants = new Set<string>([interaction.user.id]);
   const maybes = new Set<string>();
 
   const embed = buildSessionEmbed({
     game,
-    when,
     scheduledAt,
     description,
 
@@ -179,8 +174,8 @@ async function createGameSession(
       guildId: interaction.guildId,
       channelId: interaction.channelId,
 
-      game,
-      when,
+      gameId: game.id,
+
       scheduledAt,
       description,
 

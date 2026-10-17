@@ -8,15 +8,11 @@ import {
   createEmbed,
   gameLabel,
 } from "../../utils/discord-presentation.js";
-import {
-  discordTime,
-  discordTimeUnix,
-} from "../../utils/discord-time.js";
+import { discordTimeUnix } from "../../utils/discord-time.js";
 
 export type SessionEmbedData = Pick<
   GameSession,
   | "game"
-  | "when"
   | "scheduledAt"
   | "description"
   | "hostId"
@@ -77,19 +73,6 @@ const STATUS_DISPLAY: Record<SessionStatus, StatusDisplay> = {
     showParticipants: true,
     showMaybes: false,
   },
-
-  deleted: {
-    emoji: "🗑️",
-    label: "Supprimée",
-    title: "Session supprimée",
-    footer: "Session supprimée",
-    color: DISCORD_THEME.colors.muted,
-    whenField: "🕒 Prévue",
-    hostField: "👑 Hôte",
-    endText: "🗑️ **Cette session a été supprimée.**",
-    showParticipants: false,
-    showMaybes: false,
-  },
 };
 
 function formatUsers(userIds: ReadonlySet<string>): string {
@@ -100,32 +83,11 @@ function formatUsers(userIds: ReadonlySet<string>): string {
   return [...userIds].map((userId) => `<@${userId}>`).join("\n");
 }
 
-function formatSessionWhen(
-  scheduledAt: number | null,
-  fallbackWhen: string,
-): string {
-  if (scheduledAt === null) {
-    return fallbackWhen;
-  }
-
+function formatSessionWhen(scheduledAt: number): string {
   return [
     discordTimeUnix(scheduledAt, "F"),
     discordTimeUnix(scheduledAt, "R"),
   ].join("\n");
-}
-
-function sqliteDateToMilliseconds(value: string | null): number | null {
-  if (!value) {
-    return null;
-  }
-
-  const date = new Date(`${value.replace(" ", "T")}Z`);
-
-  if (Number.isNaN(date.getTime())) {
-    return null;
-  }
-
-  return date.getTime();
 }
 
 /**
@@ -142,7 +104,7 @@ export function buildSessionEmbed(session: SessionEmbedData) {
   }).addFields(
     {
       name: display.whenField,
-      value: formatSessionWhen(session.scheduledAt, session.when),
+      value: formatSessionWhen(session.scheduledAt),
       inline: true,
     },
     {
@@ -202,26 +164,18 @@ export function buildSessionHistoryEmbed(
 
   const lines = sessions.map((session) => {
     const status = STATUS_DISPLAY[session.status];
-    const createdMilliseconds = sqliteDateToMilliseconds(session.createdAt);
-
-    const createdText =
-      createdMilliseconds !== null
-        ? discordTime(createdMilliseconds, "R")
-        : "date inconnue";
 
     const participantWord =
       session.joinedCount > 1 ? "participants" : "participant";
 
-    const plannedText =
-      session.scheduledAt !== null
-        ? discordTimeUnix(session.scheduledAt, "F")
-        : session.when;
-
     return [
       `${status.emoji} **${gameLabel(session.game)}**`,
       `└ ${status.label} • ${session.joinedCount} ${participantWord}`,
-      `└ 🕒 ${plannedText}`,
-      `└ 👑 <@${session.hostId}> • créée ${createdText}`,
+      `└ 🕒 ${discordTimeUnix(session.scheduledAt, "F")}`,
+      `└ 👑 <@${session.hostId}> • créée ${discordTimeUnix(
+        session.createdAt,
+        "R",
+      )}`,
     ].join("\n");
   });
 

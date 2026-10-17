@@ -26,10 +26,7 @@ import {
   parseCustomId,
   replyEphemeral,
 } from "../../utils/discord-components.js";
-import {
-  formatSessionLegacyWhen,
-  resolveSessionSchedule,
-} from "../../utils/session-date.js";
+import { resolveSessionSchedule } from "../../utils/session-date.js";
 import { buildSessionEmbed } from "./sessions.embed.js";
 import {
   buildEditModal,
@@ -551,7 +548,7 @@ export async function handleSessionGameSelect(
   }
 
   const session = await resolveMutation(
-    updateSessionGame(messageId, interaction.user.id, game),
+    updateSessionGame(messageId, interaction.user.id, game.id),
     (message) => closePanel(interaction, message),
   );
 
@@ -607,7 +604,6 @@ export async function handleSessionEditModal(
 
   const session = await resolveMutation(
     updateSessionDetails(messageId, interaction.user.id, {
-      when: formatSessionLegacyWhen(schedule.scheduledAt),
       scheduledAt: schedule.scheduledAt,
       description,
     }),

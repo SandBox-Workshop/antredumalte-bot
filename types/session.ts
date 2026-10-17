@@ -1,4 +1,4 @@
-export type SessionStatus = "active" | "cancelled" | "completed" | "deleted";
+export type SessionStatus = "active" | "cancelled" | "completed";
 
 export type SessionCloseStatus = "cancelled" | "completed";
 
@@ -12,6 +12,9 @@ export type SessionGame = {
 
 /**
  * Représentation complète d'une session de jeu.
+ *
+ * Les informations d'affichage du jeu sont résolues depuis `games.json`.
+ * SQLite ne conserve que `game_id`.
  */
 export type GameSession = {
   id: number;
@@ -23,46 +26,52 @@ export type GameSession = {
   game: SessionGame;
 
   /**
-   * Ancienne valeur textuelle conservée pour compatibilité.
+   * Date réelle de la session au format Unix, en secondes.
    */
-  when: string;
-
-  /**
-   * Date réelle de la session au format Unix.
-   *
-   * `null` pour les anciennes sessions.
-   */
-  scheduledAt: number | null;
+  scheduledAt: number;
 
   description: string | null;
 
   creatorId: string;
   hostId: string;
 
+  /**
+   * Rôle Discord temporaire associé à la session.
+   *
+   * `null` tant que la feature de rôle temporaire ne l'a pas créé.
+   */
+  roleId: string | null;
+
   status: SessionStatus;
+
+  /**
+   * Timestamp Unix du message de début, ou `null` si pas encore envoyé.
+   */
+  startNotifiedAt: number | null;
+
+  /**
+   * Timestamp Unix de clôture, ou `null` tant que la session est active.
+   */
+  closedAt: number | null;
 
   participants: Set<string>;
   maybes: Set<string>;
 
-  createdAt: string;
-  updatedAt: string;
-
-  cancelledAt: string | null;
-  completedAt: string | null;
-  deletedAt: string | null;
+  createdAt: number;
+  updatedAt: number;
 };
 
 export type CreateSessionInput = {
   guildId: string;
   channelId: string;
 
-  game: {
-    id: string;
-    name: string;
-    emoji?: string | null;
-  };
+  /**
+   * Identifiant du jeu.
+   *
+   * Sa valeur correspond au GameDig type utilisé dans `games.json`.
+   */
+  gameId: string;
 
-  when: string;
   scheduledAt: number;
   description?: string | null;
 
@@ -70,15 +79,8 @@ export type CreateSessionInput = {
 };
 
 export type UpdateSessionDetailsInput = {
-  when: string;
   scheduledAt: number;
   description?: string | null;
-};
-
-export type UpdateSessionGameInput = {
-  id: string;
-  name: string;
-  emoji?: string | null;
 };
 
 export type SessionHistoryEntry = {
@@ -86,32 +88,29 @@ export type SessionHistoryEntry = {
 
   game: SessionGame;
 
-  when: string;
-  scheduledAt: number | null;
+  scheduledAt: number;
 
   description: string | null;
 
   creatorId: string;
   hostId: string;
 
+  roleId: string | null;
+
   status: SessionStatus;
+
+  startNotifiedAt: number | null;
+  closedAt: number | null;
 
   joinedCount: number;
   maybeCount: number;
 
-  createdAt: string;
-  updatedAt: string;
-
-  cancelledAt: string | null;
-  completedAt: string | null;
-  deletedAt: string | null;
+  createdAt: number;
+  updatedAt: number;
 };
 
 /**
  * Raisons métier pouvant empêcher une modification de session.
- *
- * Elles restent indépendantes de Discord : l'interface choisit ensuite
- * le message à afficher à l'utilisateur.
  */
 export type SessionMutationFailureReason =
   | "session_not_found"
