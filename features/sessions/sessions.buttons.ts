@@ -9,25 +9,33 @@ import {
 } from "discord.js";
 
 import { getEnabledGames, getGameById } from "../../services/game.service.js";
+
 import {
+  clearSessionRoleId,
   closeSession,
   setMemberStatus,
   transferSessionHost,
   updateSessionDetails,
   updateSessionGame,
 } from "../../services/session.service.js";
+
 import type {
   GameSession,
+  SessionMemberStatus,
   SessionMutationFailureReason,
   SessionMutationResult,
 } from "../../types/session.js";
+
 import {
   closePanel,
   parseCustomId,
   replyEphemeral,
 } from "../../utils/discord-components.js";
+
 import { resolveSessionSchedule } from "../../utils/session-date.js";
+
 import { buildSessionEmbed } from "./sessions.embed.js";
+
 import {
   buildEditModal,
   buildGameSelect,
@@ -36,7 +44,14 @@ import {
   buildSessionManagementButtons,
   SESSION_FEATURE,
 } from "./sessions.components.js";
-import { requireHostSession } from "./sessions.guard.js";
+
+import { requireActiveSession, requireHostSession } from "./sessions.guard.js";
+
+import {
+  deleteSessionRole,
+  renameSessionRole,
+  syncSessionMemberRole,
+} from "./sessions.roles.js";
 
 export { buildSessionButtons } from "./sessions.components.js";
 
@@ -47,20 +62,23 @@ type SessionCustomId = {
   messageId?: string;
 };
 
-const SESSION_MUTATION_MESSAGES: Record<
-  SessionMutationFailureReason,
-  string
-> = {
-  session_not_found: "❌ Cette session n'existe plus ou n'est plus active.",
-  not_host: "❌ Tu n'es plus l'hôte de cette session.",
-  host_cannot_leave:
-    "👑 Tu es l'hôte de cette session. Transfère d'abord l'hôte ou annule la session.",
-  host_cannot_maybe:
-    "👑 Tu es l'hôte de cette session. Transfère d'abord l'hôte ou annule la session.",
-  new_host_is_current_host: "❌ Tu es déjà l'hôte de cette session.",
-  new_host_must_be_participant:
-    "❌ Le nouvel hôte doit d'abord rejoindre la session.",
-};
+const SESSION_MUTATION_MESSAGES: Record<SessionMutationFailureReason, string> =
+  {
+    session_not_found: "❌ Cette session n'existe plus ou n'est plus active.",
+
+    not_host: "❌ Tu n'es plus l'hôte de cette session.",
+
+    host_cannot_leave:
+      "👑 Tu es l'hôte de cette session. Transfère d'abord l'hôte ou annule la session.",
+
+    host_cannot_maybe:
+      "👑 Tu es l'hôte de cette session. Transfère d'abord l'hôte ou annule la session.",
+
+    new_host_is_current_host: "❌ Tu es déjà l'hôte de cette session.",
+
+    new_host_must_be_participant:
+      "❌ Le nouvel hôte doit d'abord rejoindre la session.",
+  };
 
 function parseSessionCustomId(customId: string): SessionCustomId | null {
   const parsed = parseCustomId(customId);
@@ -80,7 +98,11 @@ function getDiscordErrorCode(error: unknown): number | undefined {
     return undefined;
   }
 
-  const code = (error as { code?: unknown }).code;
+  const code = (
+    error as {
+      code?: unknown;
+    }
+  ).code;
 
   return typeof code === "number" ? code : undefined;
 }
@@ -115,6 +137,7 @@ async function replyOrCloseButton(
 ): Promise<void> {
   if (fromManagementPanel) {
     await closePanel(interaction, message);
+
     return;
   }
 
@@ -143,10 +166,101 @@ async function requireButtonHostSession(
   return requireHostSession(
     interaction.user.id,
     messageId,
-    (message) =>
-      replyOrCloseButton(interaction, fromManagementPanel, message),
+    (message) => replyOrCloseButton(interaction, fromManagementPanel, message),
     notHostMessage,
   );
+}
+
+function getMemberStatus(
+  session: GameSession,
+  userId: string,
+): SessionMemberStatus {
+  if (session.participants.has(userId)) {
+    return "joined";
+  }
+
+  if (session.maybes.has(userId)) {
+    return "maybe";
+  }
+
+  return "left";
+}
+
+async function updateParticipation(
+  interaction: ButtonInteraction,
+  messageId: string,
+  userId: string,
+  status: SessionMemberStatus,
+): Promise<GameSession | null> {
+  const currentSession = await requireActiveSession(messageId, (message) =>
+    replyEphemeral(interaction, message),
+  );
+
+  if (!currentSession) {
+    return null;
+  }
+
+  const previousStatus = getMemberStatus(currentSession, userId);
+
+  const session = await resolveMutation(
+    setMemberStatus(messageId, userId, status),
+    (message) => replyEphemeral(interaction, message),
+  );
+
+  if (!session) {
+    return null;
+  }
+
+  try {
+    await syncSessionMemberRole(interaction.client, session, userId, status);
+  } catch (error: unknown) {
+    console.error(
+      `[sessions] Impossible de synchroniser le rôle de ${userId}.`,
+      error,
+    );
+
+    const rollback = setMemberStatus(messageId, userId, previousStatus);
+
+    if (!rollback.ok) {
+      console.error(
+        "[sessions] Impossible de restaurer l'état du participant après l'échec du rôle.",
+        rollback.reason,
+      );
+    }
+
+    await replyEphemeral(
+      interaction,
+      "❌ Impossible de mettre à jour ton rôle de session. Ton inscription n'a pas été modifiée.",
+    );
+
+    return null;
+  }
+
+  return session;
+}
+
+async function cleanupClosedSessionRole(
+  interaction: Interaction,
+  session: GameSession,
+): Promise<void> {
+  if (!session.roleId) {
+    return;
+  }
+
+  try {
+    await deleteSessionRole(interaction.client, session);
+
+    clearSessionRoleId(session.messageId);
+  } catch (error: unknown) {
+    /*
+     * La session reste correctement fermée en base.
+     * Le scheduler retentera le nettoyage au prochain tick.
+     */
+    console.error(
+      `[sessions] Impossible de supprimer le rôle de la session ${session.messageId}.`,
+      error,
+    );
+  }
 }
 
 export async function handleSessionButton(
@@ -159,15 +273,20 @@ export async function handleSessionButton(
   }
 
   const { action, messageId: referencedMessageId } = customId;
+
   const fromManagementPanel = referencedMessageId !== undefined;
+
   const messageId = referencedMessageId ?? interaction.message.id;
+
   const userId = interaction.user.id;
 
   switch (action) {
     case "join": {
-      const session = await resolveMutation(
-        setMemberStatus(messageId, userId, "joined"),
-        (message) => replyEphemeral(interaction, message),
+      const session = await updateParticipation(
+        interaction,
+        messageId,
+        userId,
+        "joined",
       );
 
       if (!session) {
@@ -176,6 +295,7 @@ export async function handleSessionButton(
 
       await interaction.update({
         embeds: [buildSessionEmbed(session)],
+
         components: buildSessionButtons(),
       });
 
@@ -183,9 +303,11 @@ export async function handleSessionButton(
     }
 
     case "maybe": {
-      const session = await resolveMutation(
-        setMemberStatus(messageId, userId, "maybe"),
-        (message) => replyEphemeral(interaction, message),
+      const session = await updateParticipation(
+        interaction,
+        messageId,
+        userId,
+        "maybe",
       );
 
       if (!session) {
@@ -194,6 +316,7 @@ export async function handleSessionButton(
 
       await interaction.update({
         embeds: [buildSessionEmbed(session)],
+
         components: buildSessionButtons(),
       });
 
@@ -201,9 +324,11 @@ export async function handleSessionButton(
     }
 
     case "leave": {
-      const session = await resolveMutation(
-        setMemberStatus(messageId, userId, "left"),
-        (message) => replyEphemeral(interaction, message),
+      const session = await updateParticipation(
+        interaction,
+        messageId,
+        userId,
+        "left",
       );
 
       if (!session) {
@@ -212,6 +337,7 @@ export async function handleSessionButton(
 
       await interaction.update({
         embeds: [buildSessionEmbed(session)],
+
         components: buildSessionButtons(),
       });
 
@@ -232,7 +358,9 @@ export async function handleSessionButton(
 
       await interaction.reply({
         content: "⚙️ **Gestion de la session**",
+
         components: buildSessionManagementButtons(messageId),
+
         flags: MessageFlags.Ephemeral,
       });
 
@@ -283,12 +411,15 @@ export async function handleSessionButton(
       if (fromManagementPanel) {
         await interaction.update({
           content: "🎮 Choisis le nouveau jeu de la session :",
+
           components: [buildGameSelect(messageId, session.game.id)],
         });
       } else {
         await interaction.reply({
           content: "🎮 Choisis le nouveau jeu de la session :",
+
           components: [buildGameSelect(messageId, session.game.id)],
+
           flags: MessageFlags.Ephemeral,
         });
       }
@@ -321,12 +452,15 @@ export async function handleSessionButton(
       if (fromManagementPanel) {
         await interaction.update({
           content: "👑 Choisis le participant qui deviendra le nouvel hôte :",
+
           components: [buildHostSelect(messageId)],
         });
       } else {
         await interaction.reply({
           content: "👑 Choisis le participant qui deviendra le nouvel hôte :",
+
           components: [buildHostSelect(messageId)],
+
           flags: MessageFlags.Ephemeral,
         });
       }
@@ -374,8 +508,11 @@ export async function handleSessionButton(
       if (sessionMessage) {
         await sessionMessage.edit({
           embeds: [buildSessionEmbed(completedSession)],
+
           components: [],
         });
+
+        await cleanupClosedSessionRole(interaction, completedSession);
 
         await closePanel(interaction, "✅ Session terminée.");
 
@@ -384,8 +521,11 @@ export async function handleSessionButton(
 
       await interaction.update({
         embeds: [buildSessionEmbed(completedSession)],
+
         components: [],
       });
+
+      await cleanupClosedSessionRole(interaction, completedSession);
 
       return true;
     }
@@ -430,8 +570,11 @@ export async function handleSessionButton(
       if (sessionMessage) {
         await sessionMessage.edit({
           embeds: [buildSessionEmbed(cancelledSession)],
+
           components: [],
         });
+
+        await cleanupClosedSessionRole(interaction, cancelledSession);
 
         await closePanel(interaction, "🚫 Session annulée.");
 
@@ -440,8 +583,11 @@ export async function handleSessionButton(
 
       await interaction.update({
         embeds: [buildSessionEmbed(cancelledSession)],
+
         components: [],
       });
+
+      await cleanupClosedSessionRole(interaction, cancelledSession);
 
       return true;
     }
@@ -461,6 +607,7 @@ export async function handleSessionHostSelect(
   }
 
   const { messageId } = customId;
+
   const newHostId = interaction.values[0];
 
   if (!newHostId) {
@@ -491,6 +638,7 @@ export async function handleSessionHostSelect(
 
   await sessionMessage.edit({
     embeds: [buildSessionEmbed(session)],
+
     components: buildSessionButtons(),
   });
 
@@ -512,6 +660,7 @@ export async function handleSessionGameSelect(
   }
 
   const { messageId } = customId;
+
   const gameId = interaction.values[0];
 
   if (!gameId) {
@@ -569,8 +718,18 @@ export async function handleSessionGameSelect(
 
   await sessionMessage.edit({
     embeds: [buildSessionEmbed(session)],
+
     components: buildSessionButtons(),
   });
+
+  try {
+    await renameSessionRole(interaction.client, session);
+  } catch (error: unknown) {
+    console.error(
+      `[sessions] Impossible de renommer le rôle de la session ${session.messageId}.`,
+      error,
+    );
+  }
 
   await closePanel(interaction, `🎮 Jeu changé pour **${game.name}**.`);
 
@@ -589,7 +748,9 @@ export async function handleSessionEditModal(
   const { messageId } = customId;
 
   const date = interaction.fields.getTextInputValue("date").trim();
+
   const time = interaction.fields.getTextInputValue("heure").trim();
+
   const description = interaction.fields
     .getTextInputValue("description")
     .trim();
@@ -605,6 +766,7 @@ export async function handleSessionEditModal(
   const session = await resolveMutation(
     updateSessionDetails(messageId, interaction.user.id, {
       scheduledAt: schedule.scheduledAt,
+
       description,
     }),
     (message) => replyEphemeral(interaction, message),
@@ -627,6 +789,7 @@ export async function handleSessionEditModal(
 
   await sessionMessage.edit({
     embeds: [buildSessionEmbed(session)],
+
     components: buildSessionButtons(),
   });
 

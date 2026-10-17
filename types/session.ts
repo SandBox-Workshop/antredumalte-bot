@@ -37,20 +37,20 @@ export type GameSession = {
 
   /**
    * Rôle Discord temporaire associé à la session.
-   *
-   * `null` tant que la feature de rôle temporaire ne l'a pas créé.
    */
   roleId: string | null;
 
   status: SessionStatus;
 
   /**
-   * Timestamp Unix du message de début, ou `null` si pas encore envoyé.
+   * Timestamp Unix du message de début,
+   * ou `null` si pas encore envoyé.
    */
   startNotifiedAt: number | null;
 
   /**
-   * Timestamp Unix de clôture, ou `null` tant que la session est active.
+   * Timestamp Unix de clôture,
+   * ou `null` tant que la session est active.
    */
   closedAt: number | null;
 
@@ -72,7 +72,13 @@ export type CreateSessionInput = {
    */
   gameId: string;
 
+  /**
+   * Rôle Discord temporaire créé pour les participants de la session.
+   */
+  roleId: string;
+
   scheduledAt: number;
+
   description?: string | null;
 
   creatorId: string;

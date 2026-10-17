@@ -55,9 +55,8 @@ type SessionBase = Omit<GameSession, "participants" | "maybes">;
 
 function sqliteIntegerToNumber(value: number | bigint): number;
 function sqliteIntegerToNumber(value: number | bigint | null): number | null;
-function sqliteIntegerToNumber(
-  value: number | bigint | null,
-): number | null {
+
+function sqliteIntegerToNumber(value: number | bigint | null): number | null {
   if (value === null) {
     return null;
   }
@@ -158,6 +157,7 @@ function hydrateSession(row: SessionRow | null): GameSession | null {
   }
 
   const sessionId = sqliteIntegerToNumber(row.id);
+
   const members = getSessionMembers(sessionId);
 
   const participants = new Set(
@@ -174,6 +174,7 @@ function hydrateSession(row: SessionRow | null): GameSession | null {
 
   return {
     ...mapSessionRow(row),
+
     participants,
     maybes,
   };
@@ -281,6 +282,8 @@ export function createSession(
         creator_id,
         host_id,
 
+        role_id,
+
         status
       )
       VALUES (
@@ -288,6 +291,7 @@ export function createSession(
         ?,
         ?, ?,
         ?, ?,
+        ?,
         'active'
       )
     `);
@@ -304,6 +308,8 @@ export function createSession(
 
       session.creatorId,
       session.creatorId,
+
+      session.roleId,
     );
 
     const sessionId = Number(result.lastInsertRowid);
@@ -355,6 +361,7 @@ export function setMemberStatus(
   }
 
   updateMemberStatus(session.id, userId, status);
+
   touchSession(session.id);
 
   return mutationSuccess(getUpdatedActiveSession(messageId));
@@ -422,6 +429,7 @@ export function updateSessionDetails(
     SET
       scheduled_at = ?,
       description = ?,
+      start_notified_at = NULL,
       updated_at = unixepoch()
     WHERE id = ?
   `);
@@ -556,4 +564,107 @@ export function getSessionHistory(
       updatedAt: session.updatedAt,
     };
   });
+}
+
+/**
+ * Retourne les sessions actives dont l'heure de début est atteinte
+ * et dont la notification n'a pas encore été traitée.
+ */
+export function getSessionsDueForStart(
+  nowUnix = Math.floor(Date.now() / 1000),
+): GameSession[] {
+  const statement = db.prepare(`
+    SELECT *
+    FROM sessions
+    WHERE status = 'active'
+      AND scheduled_at <= ?
+      AND start_notified_at IS NULL
+      AND role_id IS NOT NULL
+    ORDER BY scheduled_at ASC
+    LIMIT 50
+  `);
+
+  const rows = statement.all(nowUnix) as SessionRow[];
+
+  return rows
+    .map((row) => hydrateSession(row))
+    .filter((session): session is GameSession => session !== null);
+}
+
+/**
+ * Réserve atomiquement l'envoi de la notification de début.
+ *
+ * Le marquage a lieu avant l'appel Discord afin d'éviter les doubles
+ * pings si deux ticks du scheduler se chevauchent.
+ */
+export function claimSessionStartNotification(
+  messageId: string,
+  notifiedAt = Math.floor(Date.now() / 1000),
+): boolean {
+  const statement = db.prepare(`
+    UPDATE sessions
+    SET
+      start_notified_at = ?,
+      updated_at = unixepoch()
+    WHERE message_id = ?
+      AND status = 'active'
+      AND start_notified_at IS NULL
+  `);
+
+  const result = statement.run(notifiedAt, messageId);
+
+  return Number(result.changes) > 0;
+}
+
+/**
+ * Rend la notification de nouveau disponible
+ * lorsqu'un envoi Discord échoue.
+ */
+export function releaseSessionStartNotification(messageId: string): void {
+  const statement = db.prepare(`
+    UPDATE sessions
+    SET
+      start_notified_at = NULL,
+      updated_at = unixepoch()
+    WHERE message_id = ?
+      AND status = 'active'
+  `);
+
+  statement.run(messageId);
+}
+
+/**
+ * Retourne les sessions fermées dont le rôle Discord temporaire
+ * doit encore être supprimé.
+ */
+export function getSessionsPendingRoleCleanup(): GameSession[] {
+  const statement = db.prepare(`
+    SELECT *
+    FROM sessions
+    WHERE status IN ('cancelled', 'completed')
+      AND role_id IS NOT NULL
+    ORDER BY closed_at ASC
+    LIMIT 50
+  `);
+
+  const rows = statement.all() as SessionRow[];
+
+  return rows
+    .map((row) => hydrateSession(row))
+    .filter((session): session is GameSession => session !== null);
+}
+
+/**
+ * Oublie le rôle temporaire après sa suppression côté Discord.
+ */
+export function clearSessionRoleId(messageId: string): void {
+  const statement = db.prepare(`
+    UPDATE sessions
+    SET
+      role_id = NULL,
+      updated_at = unixepoch()
+    WHERE message_id = ?
+  `);
+
+  statement.run(messageId);
 }
