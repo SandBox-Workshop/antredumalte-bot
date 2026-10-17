@@ -22,6 +22,12 @@ import {
 
 import { buildSessionButtons } from "../../features/sessions/sessions.buttons.js";
 
+import {
+  addSessionRoleToMember,
+  createSessionRole,
+  deleteSessionRoleById,
+} from "../../features/sessions/sessions.roles.js";
+
 import { gameLabel } from "../../utils/discord-presentation.js";
 import { resolveSessionSchedule } from "../../utils/session-date.js";
 
@@ -169,36 +175,72 @@ async function createGameSession(
 
   const message = await interaction.fetchReply();
 
+  let roleId: string | null = null;
+
   try {
-    createSession(message.id, {
+    const role = await createSessionRole(
+      interaction.client,
+      interaction.guildId,
+      game.name,
+      message.id,
+    );
+
+    roleId = role.id;
+
+    await addSessionRoleToMember(
+      interaction.client,
+      interaction.guildId,
+      role.id,
+      interaction.user.id,
+    );
+
+    const createdSession = createSession(message.id, {
       guildId: interaction.guildId,
       channelId: interaction.channelId,
 
       gameId: game.id,
+      roleId: role.id,
 
       scheduledAt,
       description,
 
       creatorId: interaction.user.id,
     });
+
+    if (!createdSession) {
+      throw new Error("La session n'a pas pu être relue après sa création.");
+    }
   } catch (error: unknown) {
-    console.error(
-      "[sessions] Impossible d'enregistrer la session en base.",
-      error,
-    );
+    console.error("[sessions] Impossible de créer la session.", error);
+
+    if (roleId) {
+      try {
+        await deleteSessionRoleById(
+          interaction.client,
+          interaction.guildId,
+          roleId,
+          `Échec de création de la session ${message.id}`,
+        );
+      } catch (roleDeleteError: unknown) {
+        console.error(
+          "[sessions] Impossible de supprimer le rôle après l'échec de création.",
+          roleDeleteError,
+        );
+      }
+    }
 
     try {
       await message.delete();
     } catch (deleteError: unknown) {
       console.error(
-        "[sessions] Impossible de supprimer le message après l'échec de persistance.",
+        "[sessions] Impossible de supprimer le message après l'échec de création.",
         deleteError,
       );
 
       try {
         await message.edit({
           content:
-            "❌ Cette session n'a pas pu être enregistrée et n'est pas active.",
+            "❌ Cette session n'a pas pu être créée et n'est pas active.",
           embeds: [],
           components: [],
         });
@@ -212,7 +254,7 @@ async function createGameSession(
 
     await interaction.followUp({
       content:
-        "❌ Impossible d'enregistrer la session. Aucun événement actif n'a été créé.",
+        "❌ Impossible de créer la session ou son rôle temporaire. Vérifie notamment que le bot peut gérer les rôles.",
       flags: MessageFlags.Ephemeral,
     });
   }
@@ -250,10 +292,12 @@ export async function execute(
   switch (subcommand) {
     case "create":
       await createGameSession(interaction);
+
       return;
 
     case "history":
       await showSessionHistory(interaction);
+
       return;
 
     default:
