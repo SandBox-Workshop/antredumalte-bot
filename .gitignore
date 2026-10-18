@@ -11,6 +11,7 @@ google-service-account.json
 # Runtime data
 data/*.sqlite*
 data/faille-*.json
+data/games.json
 
 # TypeScript / build outputs
 dist/
