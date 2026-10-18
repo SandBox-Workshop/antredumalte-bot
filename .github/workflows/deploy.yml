@@ -1,0 +1,99 @@
+name: Deploy production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: antredumalte-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to OVH VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Configure SSH
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+
+          ssh-keyscan -H "$VPS_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Deploy
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+
+          ssh \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            "$VPS_USER@$VPS_HOST" \
+            'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+
+          APP_DIR="/home/ubuntu/antredumalte-bot"
+          PM2_NAME="antredumalte-bot"
+
+          export PNPM_HOME="${PNPM_HOME:-$HOME/.local/share/pnpm}"
+          export PATH="$PNPM_HOME:$PATH"
+
+          if [ -s "$HOME/.nvm/nvm.sh" ]; then
+            . "$HOME/.nvm/nvm.sh"
+          fi
+
+          cd "$APP_DIR"
+
+          echo "[deploy] Vérification du dépôt..."
+
+          CURRENT_BRANCH="$(git branch --show-current)"
+
+          if [ "$CURRENT_BRANCH" != "main" ]; then
+            echo "[deploy] ERREUR : le VPS est sur la branche '$CURRENT_BRANCH' au lieu de 'main'."
+            exit 1
+          fi
+
+          # /game add modifie data/games.json directement sur le VPS.
+          # On refuse donc un déploiement si le dépôt contient des changements locaux
+          # afin de ne jamais écraser silencieusement ces données.
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "[deploy] ERREUR : le dépôt contient des modifications locales."
+            echo "[deploy] Le déploiement est annulé pour éviter toute perte de données."
+            git status --short
+            exit 1
+          fi
+
+          echo "[deploy] Récupération de origin/main..."
+          git fetch origin main
+          git pull --ff-only origin main
+
+          echo "[deploy] Installation des dépendances..."
+          pnpm install --frozen-lockfile
+
+          echo "[deploy] Vérifications..."
+          pnpm check
+
+          echo "[deploy] Déploiement des commandes Discord..."
+          pnpm run deploy
+
+          echo "[deploy] Redémarrage du bot..."
+          pm2 restart "$PM2_NAME" --update-env
+          pm2 save
+
+          echo "[deploy] OK - version $(git rev-parse --short HEAD) déployée."
+          REMOTE
