@@ -1,6 +1,6 @@
 {
   "name": "antredumalt",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "Bot Discord privé multi-jeux pour l'Antre du Malt.",
   "main": "index.ts",
   "type": "module",

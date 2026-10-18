@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0](https://github.com/SandBox-AD/antredumalte-bot/compare/v0.2.0...v1.0.0) (2026-10-18)
+
+### Features
+
+* **games:** add game management command ([72e9de2](https://github.com/SandBox-AD/antredumalte-bot/commit/72e9de21217ecae413c8e03c142530cd6d20cd99))
+
 ## [0.2.0](https://github.com/SandBox-AD/antredumalte-bot/compare/v0.1.1...v0.2.0) (2026-10-17)
 
 ### Features
